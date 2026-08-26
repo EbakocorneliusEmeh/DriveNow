@@ -1,0 +1,15 @@
+{
+  "name": "drivenow",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DriveNow car rental and sales platform",
+  "scripts": {
+    "dev": "pnpm --parallel --filter './apps/*' dev",
+    "build": "pnpm --recursive build",
+    "lint": "pnpm --recursive lint"
+  },
+  "packageManager": "pnpm@11.23.0",
+  "engines": {
+    "node": ">=22"
+  }
+}
