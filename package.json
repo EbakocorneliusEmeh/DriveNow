@@ -4,7 +4,7 @@
   "private": true,
   "description": "DriveNow car rental and sales platform",
   "scripts": {
-    "dev": "pnpm --parallel --filter './apps/*' dev",
+    "dev": "pnpm --parallel --filter frontend --filter backend dev",
     "build": "pnpm --recursive build",
     "lint": "pnpm --recursive lint"
   },
