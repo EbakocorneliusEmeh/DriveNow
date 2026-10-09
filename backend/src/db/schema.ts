@@ -24,6 +24,7 @@ export const dealerApprovalStatus = pgEnum("dealer_approval_status", [
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
   fullName: text("full_name").notNull(),
+  avatarUrl: text("avatar_url"),
   email: text("email").notNull().unique(),
   phone: text("phone").notNull().unique(),
   passwordHash: text("password_hash").notNull(),

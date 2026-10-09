@@ -1,8 +1,9 @@
 import bcrypt from "bcrypt";
+import { createHash, randomUUID } from "node:crypto";
 import { and, eq, gt, isNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { authTokens, refreshTokens, users } from "../db/schema.js";
-import type { LoginInput, RegisterInput } from "./auth.schemas.js";
+import type { LoginInput, RegisterInput, UpdateProfileInput } from "./auth.schemas.js";
 import {
   createAccessToken,
   createOneTimeToken,
@@ -16,6 +17,7 @@ const PASSWORD_RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
 const publicUserFields = {
   id: users.id,
   fullName: users.fullName,
+  avatarUrl: users.avatarUrl,
   email: users.email,
   phone: users.phone,
   role: users.role,
@@ -178,6 +180,86 @@ export async function logoutUser(refreshTokenValue: string) {
 
 export async function getUserProfile(userId: string) {
   const [user] = await db.select(publicUserFields).from(users).where(eq(users.id, userId));
+  return user;
+}
+
+export async function updateUserProfile(userId: string, input: UpdateProfileInput) {
+  const [user] = await db
+    .update(users)
+    .set({ fullName: input.fullName, updatedAt: new Date() })
+    .where(eq(users.id, userId))
+    .returning(publicUserFields);
+  return user;
+}
+
+const imageTypes = {
+  "image/jpeg": { extension: "jpg", matches: (data: Buffer) => data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff },
+  "image/png": { extension: "png", matches: (data: Buffer) => data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  "image/webp": { extension: "webp", matches: (data: Buffer) => data.toString("ascii", 0, 4) === "RIFF" && data.toString("ascii", 8, 12) === "WEBP" },
+} as const;
+
+export async function updateUserProfilePicture(
+  userId: string,
+  contentType: string,
+  image: Buffer,
+) {
+  const imageType = imageTypes[contentType as keyof typeof imageTypes];
+  if (!imageType || !imageType.matches(image)) {
+    const error = new Error("Choose a valid JPEG, PNG, or WebP image");
+    error.name = "InvalidProfileImageError";
+    throw error;
+  }
+
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  const apiKey = process.env.CLOUDINARY_API_KEY;
+  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  if (!cloudName || !apiKey || !apiSecret) {
+    const error = new Error("Profile picture storage is not configured");
+    error.name = "CloudinaryConfigError";
+    throw error;
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const publicId = `drivenow/profiles/${userId}/${randomUUID()}`;
+  const signature = createHash("sha1")
+    .update(`public_id=${publicId}&timestamp=${timestamp}${apiSecret}`)
+    .digest("hex");
+  const form = new FormData();
+  const fileName = `profile.${imageType.extension}`;
+  form.set("file", new Blob([new Uint8Array(image)], { type: contentType }), fileName);
+  form.set("api_key", apiKey);
+  form.set("public_id", publicId);
+  form.set("timestamp", timestamp);
+  form.set("signature", signature);
+
+  let uploadResponse: Response;
+  try {
+    uploadResponse = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/upload`, {
+      method: "POST",
+      body: form,
+    });
+  } catch {
+    const error = new Error("Unable to reach profile picture storage");
+    error.name = "CloudinaryUploadError";
+    throw error;
+  }
+
+  const uploadResult = (await uploadResponse.json().catch(() => null)) as
+    | { secure_url?: string; error?: { message?: string } }
+    | null;
+  if (!uploadResponse.ok || !uploadResult?.secure_url) {
+    console.error("Cloudinary profile image upload failed", uploadResult?.error?.message ?? uploadResponse.statusText);
+    const error = new Error("Unable to upload your profile picture");
+    error.name = "CloudinaryUploadError";
+    throw error;
+  }
+
+  const [user] = await db
+    .update(users)
+    .set({ avatarUrl: uploadResult.secure_url, updatedAt: new Date() })
+    .where(eq(users.id, userId))
+    .returning(publicUserFields);
+  if (!user) throw new Error("User account not found");
   return user;
 }
 

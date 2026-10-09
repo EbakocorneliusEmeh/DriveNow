@@ -1,4 +1,4 @@
-import { Router, type Router as ExpressRouter } from "express";
+import express, { Router, type Router as ExpressRouter } from "express";
 import { ZodError } from "zod";
 import {
   loginSchema,
@@ -6,6 +6,7 @@ import {
   registerSchema,
   resetPasswordSchema,
   resetRequestSchema,
+  updateProfileSchema,
   verifyTokenSchema,
 } from "./auth.schemas.js";
 import {
@@ -16,6 +17,8 @@ import {
   registerUser,
   requestPasswordReset,
   resetUserPassword,
+  updateUserProfile,
+  updateUserProfilePicture,
   verifyUserContact,
 } from "./auth.service.js";
 import { requireAuth, type AuthenticatedRequest } from "./auth.middleware.js";
@@ -137,6 +140,61 @@ router.get("/me", requireAuth, async (req, res) => {
   }
   res.status(200).json({ success: true, data: { user } });
 });
+
+router.patch("/me", requireAuth, async (req, res) => {
+  try {
+    const input = updateProfileSchema.parse(req.body);
+    const user = await updateUserProfile((req as AuthenticatedRequest).user.id, input);
+    if (!user) {
+      res.status(404).json({ success: false, message: "User account not found" });
+      return;
+    }
+    res.status(200).json({ success: true, data: { user } });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      res.status(400).json({ success: false, message: "Enter a name between 2 and 120 characters" });
+      return;
+    }
+    console.error(error);
+    res.status(500).json({ success: false, message: "Unable to update your profile" });
+  }
+});
+
+router.post(
+  "/me/profile-picture",
+  requireAuth,
+  express.raw({ type: ["image/jpeg", "image/png", "image/webp"], limit: "5mb" }),
+  async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      res.status(400).json({ success: false, message: "Choose an image to upload" });
+      return;
+    }
+
+    try {
+      const user = await updateUserProfilePicture(
+        (req as AuthenticatedRequest).user.id,
+        req.header("content-type") ?? "",
+        req.body,
+      );
+      res.status(200).json({ success: true, data: { user } });
+    } catch (error) {
+      if (error instanceof Error && error.name === "InvalidProfileImageError") {
+        res.status(400).json({ success: false, message: error.message });
+        return;
+      }
+      if (error instanceof Error && error.name === "CloudinaryConfigError") {
+        res.status(503).json({ success: false, message: error.message });
+        return;
+      }
+      if (error instanceof Error && error.name === "CloudinaryUploadError") {
+        res.status(502).json({ success: false, message: error.message });
+        return;
+      }
+      console.error(error);
+      res.status(500).json({ success: false, message: "Unable to upload your profile picture" });
+    }
+  },
+);
 
 router.post("/forgot-password", async (req, res) => {
   try {

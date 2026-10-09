@@ -48,10 +48,11 @@ export default function BecomeADealerPage() {
       router.replace("/login");
       return;
     }
+    const requestHeaders: HeadersInit = headers;
 
     async function loadProfile() {
       try {
-        const response = await fetch(`${API_URL}/me`, { headers });
+        const response = await fetch(`${API_URL}/me`, { headers: requestHeaders });
         if (response.status === 401) {
           router.replace("/login");
           return;
