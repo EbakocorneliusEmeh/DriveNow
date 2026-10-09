@@ -2,6 +2,9 @@ import express, { type Express } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
+import adminRoutes from "./admin/admin.routes.js";
+import authRoutes from "./auth/auth.routes.js";
+import dealerRoutes from "./dealers/dealer.routes.js";
 
 const app: Express = express();
 
@@ -24,6 +27,10 @@ app.use(express.urlencoded({ extended: true }));
 
 // HTTP request logging
 app.use(morgan("dev"));
+
+app.use("/api/auth", authRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/dealers", dealerRoutes);
 
 // Health check
 app.get("/api/health", (_req, res) => {

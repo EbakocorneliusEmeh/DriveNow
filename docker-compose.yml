@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: drivenow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: drivenow
+      POSTGRES_PASSWORD: drivenow_dev_password
+      POSTGRES_DB: drivenow
+    ports:
+      - "5433:5432"
+    volumes:
+      - drivenow-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  drivenow-postgres-data:
