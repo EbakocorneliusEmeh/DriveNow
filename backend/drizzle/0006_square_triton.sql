@@ -1,0 +1,1 @@
+ALTER TABLE "dealer_profiles" ADD COLUMN "profile_picture_url" text;

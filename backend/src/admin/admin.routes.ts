@@ -8,6 +8,7 @@ import {
   listUsers,
   reviewDealerApplication,
 } from "./admin.service.js";
+import { createNotification } from "../notifications/notifications.service.js";
 
 const router: ExpressRouter = Router();
 
@@ -35,6 +36,15 @@ router.patch("/dealer-applications/:applicationId", async (req, res) => {
       res.status(404).json({ success: false, message: "Dealer application not found" });
       return;
     }
+
+    await createNotification({
+      userId: application.userId,
+      title: decision === "approved" ? "Dealer application approved" : "Dealer application update",
+      body: decision === "approved"
+        ? "Your dealer application was approved. You can now manage your business listings."
+        : "Your dealer application was not approved. Review your application details and contact support if you need help.",
+      link: "/become-a-dealer",
+    });
 
     res.status(200).json({
       success: true,

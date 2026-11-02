@@ -5,6 +5,7 @@ import morgan from "morgan";
 import adminRoutes from "./admin/admin.routes.js";
 import authRoutes from "./auth/auth.routes.js";
 import dealerRoutes from "./dealers/dealer.routes.js";
+import notificationRoutes from "./notifications/notifications.routes.js";
 
 const app: Express = express();
 
@@ -14,7 +15,7 @@ app.use(helmet());
 // Allow frontend to communicate with backend
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: process.env.FRONTEND_URL ?? "http://localhost:3000",
     credentials: true,
   })
 );
@@ -31,6 +32,7 @@ app.use(morgan("dev"));
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/dealers", dealerRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 // Health check
 app.get("/api/health", (_req, res) => {

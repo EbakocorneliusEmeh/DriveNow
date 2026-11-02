@@ -2,6 +2,7 @@
 node_modules/
 
 # Environment variables
+backend/secrets/
 .env
 .env.*
 !.env.example

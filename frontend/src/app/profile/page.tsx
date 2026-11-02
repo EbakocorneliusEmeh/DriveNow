@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
 const API_ORIGIN = "http://localhost:4000";
@@ -20,7 +20,7 @@ type ProfileUser = {
 type ApiResponse = {
   success: boolean;
   message?: string;
-  data?: { user: ProfileUser };
+  data?: { user: ProfileUser; accessToken?: string };
 };
 
 function getAvatarSource(avatarUrl: string | null) {
@@ -33,7 +33,6 @@ export default function ProfilePage() {
   const [user, setUser] = useState<ProfileUser | null>(null);
   const [fullName, setFullName] = useState("");
   const [selectedPicture, setSelectedPicture] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -47,6 +46,7 @@ export default function ProfilePage() {
   useEffect(() => {
     const headers = authorizationHeaders();
     if (!headers) {
+      setLoading(false);
       router.replace("/login");
       return;
     }
@@ -76,15 +76,16 @@ export default function ProfilePage() {
     void loadProfile();
   }, [router]);
 
-  useEffect(() => {
-    if (!selectedPicture) {
-      setPreviewUrl("");
-      return;
-    }
-    const objectUrl = URL.createObjectURL(selectedPicture);
-    setPreviewUrl(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
+  const previewUrl = useMemo(() => {
+    if (!selectedPicture) return "";
+    return URL.createObjectURL(selectedPicture);
   }, [selectedPicture]);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -136,6 +137,9 @@ export default function ProfilePage() {
         throw new Error(result.message ?? "Unable to upload your profile picture");
       }
       setUser(result.data.user);
+      if (result.data.accessToken) {
+        sessionStorage.setItem("drivenow_access_token", result.data.accessToken);
+      }
       setSelectedPicture(null);
       setMessage("Your profile picture has been updated.");
     } catch (error) {

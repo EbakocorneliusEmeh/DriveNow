@@ -45,6 +45,8 @@ export async function registerUser(input: RegisterInput) {
       email: input.email,
       phone: input.phone,
       passwordHash,
+      emailVerified: true,
+      phoneVerified: true,
     })
     .returning({ id: users.id, fullName: users.fullName, email: users.email });
 
@@ -52,33 +54,8 @@ export async function registerUser(input: RegisterInput) {
     throw new Error("User could not be created");
   }
 
-  const emailVerificationToken = createOneTimeToken();
-  const phoneVerificationToken = createOneTimeToken();
-  await db.insert(authTokens).values([
-    {
-      userId: user.id,
-      type: "email_verification",
-      tokenHash: hashToken(emailVerificationToken),
-      expiresAt: new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS),
-    },
-    {
-      userId: user.id,
-      type: "phone_verification",
-      tokenHash: hashToken(phoneVerificationToken),
-      expiresAt: new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS),
-    },
-  ]);
-
   return {
     user,
-    // This will be sent by email/SMS once those providers are configured.
-    verificationTokens:
-      process.env.NODE_ENV === "production"
-        ? undefined
-        : {
-            email: emailVerificationToken,
-            phone: phoneVerificationToken,
-          },
   };
 }
 
@@ -90,7 +67,9 @@ export async function loginUser(input: LoginInput) {
     .where(or(eq(users.email, identifier), eq(users.phone, input.identifier)))
     .limit(1);
 
-  const validPassword = user ? await bcrypt.compare(input.password, user.passwordHash) : false;
+  const validPassword = user?.passwordHash
+    ? await bcrypt.compare(input.password, user.passwordHash)
+    : false;
   if (!user || !validPassword) {
     const error = new Error("Invalid email/phone or password");
     error.name = "InvalidCredentialsError";
@@ -224,6 +203,7 @@ export async function updateUserProfilePicture(
   const signature = createHash("sha1")
     .update(`public_id=${publicId}&timestamp=${timestamp}${apiSecret}`)
     .digest("hex");
+
   const form = new FormData();
   const fileName = `profile.${imageType.extension}`;
   form.set("file", new Blob([new Uint8Array(image)], { type: contentType }), fileName);
@@ -254,13 +234,13 @@ export async function updateUserProfilePicture(
     throw error;
   }
 
-  const [user] = await db
+  const [updatedUser] = await db
     .update(users)
     .set({ avatarUrl: uploadResult.secure_url, updatedAt: new Date() })
     .where(eq(users.id, userId))
     .returning(publicUserFields);
-  if (!user) throw new Error("User account not found");
-  return user;
+  if (!updatedUser) throw new Error("User account not found");
+  return updatedUser;
 }
 
 export async function requestPasswordReset(identifier: string) {
@@ -303,41 +283,5 @@ export async function resetUserPassword(token: string, password: string) {
     await transaction.update(users).set({ passwordHash, updatedAt: new Date() }).where(eq(users.id, authToken.userId));
     await transaction.update(authTokens).set({ consumedAt: new Date() }).where(eq(authTokens.id, authToken.id));
     await transaction.update(refreshTokens).set({ revokedAt: new Date() }).where(eq(refreshTokens.userId, authToken.userId));
-  });
-}
-
-export async function verifyUserContact(
-  token: string,
-  type: "email_verification" | "phone_verification",
-) {
-  const [authToken] = await db
-    .select({
-      id: authTokens.id,
-      userId: authTokens.userId,
-      expiresAt: authTokens.expiresAt,
-      consumedAt: authTokens.consumedAt,
-    })
-    .from(authTokens)
-    .where(
-      and(eq(authTokens.tokenHash, hashToken(token)), eq(authTokens.type, type)),
-    )
-    .limit(1);
-
-  if (!authToken || authToken.consumedAt || authToken.expiresAt <= new Date()) {
-    const error = new Error("Verification token is invalid or expired");
-    error.name = "InvalidTokenError";
-    throw error;
-  }
-
-  await db.transaction(async (transaction) => {
-    await transaction
-      .update(authTokens)
-      .set({ consumedAt: new Date() })
-      .where(eq(authTokens.id, authToken.id));
-
-    await transaction
-      .update(users)
-      .set(type === "email_verification" ? { emailVerified: true } : { phoneVerified: true })
-      .where(eq(users.id, authToken.userId));
   });
 }

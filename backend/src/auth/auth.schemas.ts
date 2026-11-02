@@ -9,10 +9,7 @@ export const registerSchema = z.object({
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 
-export const verifyTokenSchema = z.object({
-  token: z.string().length(64),
-  type: z.enum(["email_verification", "phone_verification"]),
-});
+
 
 export const loginSchema = z.object({
   identifier: z.string().trim().min(3),
@@ -30,6 +27,11 @@ export const resetRequestSchema = z.object({
 export const resetPasswordSchema = z.object({
   token: z.string().length(64),
   password: z.string().min(8).max(72),
+});
+
+export const googleLoginSchema = z.object({
+  token: z.string().min(1).max(8192),
+  phone: z.string().trim().min(7).max(30).optional(),
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;

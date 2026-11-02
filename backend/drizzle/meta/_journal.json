@@ -29,6 +29,27 @@
       "when": 1791540813142,
       "tag": "0003_first_gladiator",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791798243877,
+      "tag": "0004_stale_beast",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792756362880,
+      "tag": "0005_stiff_onslaught",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793608854551,
+      "tag": "0006_square_triton",
+      "breakpoints": true
     }
   ]
 }

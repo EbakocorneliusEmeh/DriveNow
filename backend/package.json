@@ -12,7 +12,10 @@
     "lint": "eslint .",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "admin:promote": "tsx src/scripts/promote-admin.ts"
+    "admin:promote": "tsx src/scripts/promote-admin.ts",
+    "admin:list": "tsx src/scripts/list-users.ts",
+    "admin:reset-password": "tsx src/scripts/reset-password.ts",
+    "db:clear-users": "tsx src/scripts/delete-all-users.ts"
   },
   "dependencies": {
     "@prisma/client": "^7.10.0",
@@ -20,7 +23,10 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
+    "encoding": "^0.1.14",
     "express": "^5.2.1",
+    "firebase-admin": "^14.5.0",
+    "google-auth-library": "^11.3.1",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.11.0",

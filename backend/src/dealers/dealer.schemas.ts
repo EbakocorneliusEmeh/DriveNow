@@ -12,4 +12,11 @@ export const dealerApplicationSchema = z.object({
   documentUrls: z.array(z.url()).min(1).max(5),
 });
 
+export const dealerProfileUpdateSchema = dealerApplicationSchema.omit({
+  documentUrls: true,
+}).extend({
+  logoUrl: optionalUrl.optional(),
+});
+
 export type DealerApplicationInput = z.infer<typeof dealerApplicationSchema>;
+export type DealerProfileUpdateInput = z.infer<typeof dealerProfileUpdateSchema>;

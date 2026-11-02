@@ -27,7 +27,8 @@ export const users = pgTable("users", {
   avatarUrl: text("avatar_url"),
   email: text("email").notNull().unique(),
   phone: text("phone").notNull().unique(),
-  passwordHash: text("password_hash").notNull(),
+  passwordHash: text("password_hash"),
+  googleId: text("google_id").unique(),
   role: userRole("role").default("customer").notNull(),
   emailVerified: boolean("email_verified").default(false).notNull(),
   phoneVerified: boolean("phone_verified").default(false).notNull(),
@@ -78,6 +79,7 @@ export const dealerProfiles = pgTable("dealer_profiles", {
   businessAddress: text("business_address").notNull(),
   description: text("description").notNull(),
   logoUrl: text("logo_url"),
+  profilePictureUrl: text("profile_picture_url"),
   documentUrls: jsonb("document_urls").$type<string[]>().notNull(),
   approvalStatus: dealerApprovalStatus("approval_status")
     .default("pending")
@@ -86,6 +88,34 @@ export const dealerProfiles = pgTable("dealer_profiles", {
     .defaultNow()
     .notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const pushInstallations = pgTable("push_installations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id")
+    .references(() => users.id, { onDelete: "cascade" })
+    .notNull(),
+  installationId: text("installation_id").notNull().unique(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const notifications = pgTable("notifications", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id")
+    .references(() => users.id, { onDelete: "cascade" })
+    .notNull(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  link: text("link"),
+  readAt: timestamp("read_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
 });

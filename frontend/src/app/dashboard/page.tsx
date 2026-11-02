@@ -4,8 +4,10 @@ import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { registerForPushNotifications } from "@/lib/firebase-messaging";
+import SettingsLink from "@/components/SettingsLink";
+import { useAuth } from "@/hooks/useAuth";
 
-const API_URL = "http://localhost:4000/api/auth";
 const API_ORIGIN = "http://localhost:4000";
 
 type CurrentUser = {
@@ -14,12 +16,19 @@ type CurrentUser = {
   role: "customer" | "dealer" | "admin";
 };
 
-type CurrentUserResponse = {
-  success: boolean;
-  data?: { user: CurrentUser };
+type UserNotification = {
+  id: string;
+  title: string;
+  body: string;
+  link: string | null;
+  readAt: string | null;
+  createdAt: string;
 };
 
 function getInitials(fullName: string) {
+  if (!fullName) {
+    return "";
+  }
   return fullName
     .split(/\s+/)
     .filter(Boolean)
@@ -29,6 +38,9 @@ function getInitials(fullName: string) {
 }
 
 function getAvatarSource(avatarUrl: string) {
+  if (avatarUrl.startsWith("http")) {
+    return avatarUrl;
+  }
   return avatarUrl.startsWith("/") ? `${API_ORIGIN}${avatarUrl}` : avatarUrl;
 }
 
@@ -38,41 +50,62 @@ function formatRole(role: CurrentUser["role"]) {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [user, setUser] = useState<CurrentUser | null>(null);
+  const { user, isLoading: isAuthLoading, error: authError } = useAuth();
   const [now, setNow] = useState<Date | null>(null);
   const [isPictureOpen, setIsPictureOpen] = useState(false);
+  const [notifications, setNotifications] = useState<UserNotification[]>([]);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [pushMessage, setPushMessage] = useState("");
+  const [isRegisteringPush, setIsRegisteringPush] = useState(false);
 
-  useEffect(() => {
+  async function loadNotifications() {
     const token = sessionStorage.getItem("drivenow_access_token");
-    if (!token) {
-      router.replace("/login");
-      return;
+    if (!token) return;
+    const response = await fetch("http://localhost:4000/api/notifications", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) throw new Error("Could not load notifications.");
+    const result = await response.json() as { success: boolean; data?: { notifications: UserNotification[] } };
+    if (result.success) setNotifications(result.data?.notifications ?? []);
+  }
+
+  async function enableNotifications() {
+    const token = sessionStorage.getItem("drivenow_access_token");
+    if (!token) return;
+    setIsRegisteringPush(true);
+    setPushMessage("");
+    try {
+      const installationId = await registerForPushNotifications();
+      const response = await fetch("http://localhost:4000/api/notifications/installation", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ installationId }),
+      });
+      if (!response.ok) throw new Error("Could not save this browser for push notifications.");
+      setPushMessage("Notifications are enabled for this browser.");
+    } catch (error) {
+      setPushMessage(error instanceof Error ? error.message : "Could not enable notifications.");
+    } finally {
+      setIsRegisteringPush(false);
     }
+  }
 
-    async function loadCurrentUser() {
-      try {
-        const response = await fetch(`${API_URL}/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!response.ok) {
-          sessionStorage.removeItem("drivenow_access_token");
-          router.replace("/login");
-          return;
-        }
-
-        const result = (await response.json()) as CurrentUserResponse;
-        if (!result.success || !result.data?.user) {
-          throw new Error("Unable to load the signed-in user");
-        }
-        setUser(result.data.user);
-      } catch {
-        sessionStorage.removeItem("drivenow_access_token");
-        router.replace("/login");
-      }
+  async function openNotification(item: UserNotification) {
+    const token = sessionStorage.getItem("drivenow_access_token");
+    if (token && !item.readAt) {
+      await fetch(`http://localhost:4000/api/notifications/${item.id}/read`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setNotifications((current) => current.map((notification) => notification.id === item.id
+        ? { ...notification, readAt: new Date().toISOString() }
+        : notification));
     }
+    setIsNotificationsOpen(false);
+    if (item.link) router.push(item.link);
+  }
 
-    void loadCurrentUser();
-  }, [router]);
+
 
   useEffect(() => {
     const updateClock = () => setNow(new Date());
@@ -90,8 +123,8 @@ export default function DashboardPage() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [isPictureOpen]);
 
-  const displayName = user?.fullName ?? "Loading…";
-  const firstName = user?.fullName.split(/\s+/)[0] ?? "there";
+  const displayName = user?.fullName ?? (isAuthLoading ? "Loading…" : "Account unavailable");
+  const firstName = user?.fullName?.split(/\s+/)[0] ?? "there";
   const currentDateTime = now?.toLocaleString(undefined, {
     weekday: "long",
     month: "long",
@@ -102,12 +135,21 @@ export default function DashboardPage() {
     second: "2-digit",
   }) ?? "Loading current time…";
 
+  function handleLogout() {
+    sessionStorage.removeItem("drivenow_access_token");
+    sessionStorage.removeItem("drivenow_refresh_token");
+    router.replace("/login");
+  }
+
   return (
     <main className="min-h-screen bg-[#f4f1eb] text-[#18211f]">
+      {authError && <p role="alert" className="border-b border-red-200 bg-red-50 px-6 py-3 text-center text-sm text-red-800">{authError}</p>}
       <aside className="fixed inset-y-0 left-0 z-10 hidden w-64 flex-col border-r border-[#e2ded5] bg-[#fffdf9] px-6 py-8 lg:flex">
         <Link href="/" className="text-xl font-bold tracking-[-0.06em] text-[#123b35]">Drive<span className="text-[#d9a441]">Now</span></Link>
         <div className="mt-16 space-y-2 text-sm font-semibold">
           <Link href="/dashboard" className="flex items-center gap-3 rounded-xl bg-[#123b35] px-4 py-3 text-white"><span>⌂</span> Overview</Link>
+          <SettingsLink />
+          <button onClick={handleLogout} className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>↩️</span> Logout</button>
           <a href="#vehicles" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>▦</span> Browse vehicles</a>
           <a href="#bookings" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>◷</span> My bookings</a>
           <a href="#messages" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>□</span> Messages</a>
@@ -116,10 +158,31 @@ export default function DashboardPage() {
       </aside>
 
       <section className="lg:ml-64">
-        <header className="flex items-center justify-between border-b border-[#e2ded5] bg-[#f4f1eb]/90 px-6 py-5 backdrop-blur sm:px-10"><div className="lg:hidden"><Link href="/" className="text-lg font-bold tracking-[-0.06em] text-[#123b35]">Drive<span className="text-[#d9a441]">Now</span></Link></div><p className="hidden text-sm font-medium text-[#68756f] sm:block" aria-live="polite">{currentDateTime}</p><div className="flex items-center gap-3 sm:gap-4"><Link href="/profile" className="rounded-xl border border-[#d6dcd5] bg-[#fffdf9] px-3 py-2 text-xs font-bold text-[#245c4c] transition hover:bg-[#e9eee7] sm:px-4 sm:py-3 sm:text-sm">Edit profile</Link><button type="button" className="relative rounded-full border border-[#d6dcd5] bg-[#fffdf9] p-3 text-sm">♧<span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-[#d9a441]" /></button><div className="flex items-center gap-3">{user?.avatarUrl ? <button type="button" onClick={() => setIsPictureOpen(true)} aria-label={`View ${user.fullName}'s profile picture`} className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-[#d9a441] ring-offset-2 transition hover:ring-2 hover:ring-[#d9a441] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#123b35]"><Image src={getAvatarSource(user.avatarUrl)} alt="" width={36} height={36} unoptimized className="h-full w-full object-cover" /></button> : <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-[#d9a441] text-xs font-bold text-[#123b35]">{user ? getInitials(user.fullName) : "…"}</div>}<div className="hidden text-left sm:block"><p className="text-xs font-bold text-[#123b35]">{displayName}</p><p className="text-[11px] text-[#87928c]">{user ? formatRole(user.role) : "Loading account…"}</p></div></div></div></header>
+        <header className="flex items-center justify-between border-b border-[#e2ded5] bg-[#f4f1eb]/90 px-6 py-5 backdrop-blur sm:px-10"><div className="lg:hidden"><Link href="/" className="text-lg font-bold tracking-[-0.06em] text-[#123b35]">Drive<span className="text-[#d9a441]">Now</span></Link></div><p className="hidden text-sm font-medium text-[#68756f] sm:block" aria-live="polite">{currentDateTime}</p><div className="flex items-center gap-3 sm:gap-4"><div className="relative"><button type="button" aria-label="Open notifications" aria-expanded={isNotificationsOpen} onClick={() => { const opening = !isNotificationsOpen; setIsNotificationsOpen(opening); if (opening) void loadNotifications().catch(() => setPushMessage("Could not load notifications.")); }} className="relative rounded-full border border-[#d6dcd5] bg-[#fffdf9] p-3 text-sm">♧{notifications.some((item) => !item.readAt) && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-[#d9a441]" />}</button>{isNotificationsOpen && <div className="absolute right-0 top-14 z-30 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-[#e2ded5] bg-[#fffdf9] p-4 shadow-xl"><div className="flex items-center justify-between"><h2 className="font-semibold text-[#123b35]">Notifications</h2><button type="button" onClick={() => void enableNotifications()} disabled={isRegisteringPush} className="text-xs font-bold text-[#245c4c] disabled:opacity-60">{isRegisteringPush ? "Enabling…" : "Enable push"}</button></div>{pushMessage && <p role="status" className="mt-3 text-xs text-[#68756f]">{pushMessage}</p>}<div className="mt-3 max-h-80 divide-y divide-[#e9e5dc] overflow-y-auto">{notifications.length ? notifications.map((item) => <button type="button" key={item.id} onClick={() => void openNotification(item)} className={`block w-full py-3 text-left ${item.readAt ? "opacity-70" : ""}`}><span className="block text-sm font-semibold text-[#123b35]">{item.title}</span><span className="mt-1 block text-xs leading-5 text-[#68756f]">{item.body}</span></button>) : <p className="py-5 text-center text-sm text-[#68756f]">You’re all caught up.</p>}</div></div>}</div><div className="flex items-center gap-3">{user?.avatarUrl ? <button type="button" onClick={() => setIsPictureOpen(true)} aria-label={`View ${user.fullName}'s profile picture`} className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-[#d9a441] ring-offset-2 transition hover:ring-2 hover:ring-[#d9a441] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#123b35]"><Image src={getAvatarSource(user.avatarUrl)} alt="" width={36} height={36} unoptimized className="h-full w-full object-cover" /></button> : <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-[#d9a441] text-xs font-bold text-[#123b35]">{user ? getInitials(user.fullName) : "…"}</div>}<div className="hidden text-left sm:block"><p className="text-xs font-bold text-[#123b35]">{displayName}</p><p className="text-[11px] text-[#87928c]">{isAuthLoading ? "Loading account…" : user ? formatRole(user.role) : ""}</p></div></div></div></header>
 
         <div className="mx-auto max-w-7xl px-6 py-8 sm:px-10 lg:px-12 lg:py-12">
-          <section className="relative overflow-hidden rounded-[1.75rem] bg-[#123b35] px-7 py-9 text-[#f4f1eb] sm:px-10 sm:py-12"><div className="absolute -right-20 -top-32 h-80 w-80 rounded-full border-[4rem] border-[#d9a441]/20" /><div className="relative"><p className="mb-4 text-xs font-bold uppercase tracking-[0.25em] text-[#d9a441]">Good morning, {firstName}</p><h1 className="max-w-xl text-4xl font-semibold leading-tight tracking-[-0.06em] sm:text-6xl">Find a car that<br /><span className="text-[#d9a441]">fits your plans.</span></h1><p className="mt-5 max-w-md text-sm leading-6 text-[#b8ccc5]">Vehicle listings from trusted local dealers will appear here when they are published.</p>{user?.role === "admin" && <Link href="/admin" className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#d9a441] px-5 py-3 text-sm font-bold text-[#123b35] transition hover:bg-[#e7b955] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#f4f1eb]">Go to Admin Dashboard <span aria-hidden="true">→</span></Link>}</div></section>
+          <div className="mb-8 flex items-center justify-between">
+            <h1 className="text-4xl font-bold">Dashboard</h1>
+            <div className="flex space-x-4">
+              {!isAuthLoading && user?.role === "admin" && (
+                <Link href="/admin">
+                  <button className="rounded bg-blue-600 px-4 py-2 font-bold text-white hover:bg-blue-700">
+                    Admin Page
+                  </button>
+                </Link>
+              )}
+              {!isAuthLoading && user?.role === "dealer" && (
+                <Link
+                  href="/dashboard/dealer"
+                  className="rounded-xl bg-[#d9a441] px-5 py-3 text-sm font-bold text-[#18211f] transition hover:bg-[#e7b95b] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#123b35]"
+                >
+                  Dealer Dashboard
+                </Link>
+              )}
+            </div>
+          </div>
+
+          <section className="relative overflow-hidden rounded-[1.75rem] bg-[#123b35] px-7 py-9 text-[#f4f1eb] sm:px-10 sm:py-12"><div className="absolute -right-20 -top-32 h-80 w-80 rounded-full border-[4rem] border-[#d9a441]/20" /><div className="relative"><p className="mb-4 text-xs font-bold uppercase tracking-[0.25em] text-[#d9a441]">Good morning, {firstName}</p><h1 className="max-w-xl text-4xl font-semibold leading-tight tracking-[-0.06em] sm:text-6xl">Find a car that<br /><span className="text-[#d9a441]">fits your plans.</span></h1><p className="mt-5 max-w-md text-sm leading-6 text-[#b8ccc5]">Vehicle listings from trusted local dealers will appear here when they are published.</p></div></section>
 
           <section className="grid gap-4 py-8 sm:grid-cols-3"><div className="rounded-2xl bg-[#fffdf9] p-5"><p className="text-xs text-[#87928c]">Available today</p><p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[#123b35]">0</p><p className="mt-1 text-xs text-[#245c4c]">Vehicles ready to move</p></div><div className="rounded-2xl bg-[#d9a441] p-5"><p className="text-xs text-[#76571b]">Your bookings</p><p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[#123b35]">0</p><p className="mt-1 text-xs text-[#76571b]">Start your first trip</p></div><div className="rounded-2xl bg-[#e4ded2] p-5"><p className="text-xs text-[#7c6949]">Saved vehicles</p><p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[#123b35]">0</p><p className="mt-1 text-xs text-[#7c6949]">Keep favourites close</p></div></section>
 

@@ -22,8 +22,49 @@ import {
   verifyUserContact,
 } from "./auth.service.js";
 import { requireAuth, type AuthenticatedRequest } from "./auth.middleware.js";
+import { googleLoginSchema } from "./auth.schemas.js";
+import { signInWithGoogle, verifyGoogleToken } from "./auth.google.js";
 
 const router: ExpressRouter = Router();
+
+router.post("/google", async (req, res) => {
+  try {
+    const { token, phone } = googleLoginSchema.parse(req.body);
+    const payload = await verifyGoogleToken(token);
+    if (!payload.email || !payload.sub || !payload.name) {
+      return res.status(400).json({ success: false, message: "Invalid Google token payload" });
+    }
+    const result = await signInWithGoogle(
+      payload.sub,
+      payload.email.toLowerCase(),
+      payload.name,
+      payload.picture ?? "",
+      phone,
+    );
+    if ("needsPhone" in result) {
+      return res.status(202).json({
+        success: true,
+        data: { needsPhone: true },
+      });
+    }
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return res.status(400).json({ success: false, message: "Invalid request body" });
+    }
+    if (error instanceof Error && error.name === "InvalidGoogleTokenError") {
+      return res.status(401).json({ success: false, message: error.message });
+    }
+    if (error instanceof Error && error.name === "GoogleEmailNotVerifiedError") {
+      return res.status(403).json({ success: false, message: error.message });
+    }
+    if (error instanceof Error && error.name === "ConflictError") {
+      return res.status(409).json({ success: false, message: error.message });
+    }
+    console.error(error);
+    res.status(500).json({ success: false, message: "Unable to sign in with Google" });
+  }
+});
 
 router.post("/register", async (req, res) => {
   try {
@@ -55,30 +96,7 @@ router.post("/register", async (req, res) => {
   }
 });
 
-router.post("/verify", async (req, res) => {
-  try {
-    const { token, type } = verifyTokenSchema.parse(req.body);
-    await verifyUserContact(token, type);
 
-    res.status(200).json({
-      success: true,
-      message: `${type === "email_verification" ? "Email" : "Phone number"} verified successfully`,
-    });
-  } catch (error) {
-    if (error instanceof ZodError) {
-      res.status(400).json({ success: false, message: "Invalid verification details" });
-      return;
-    }
-
-    if (error instanceof Error && error.name === "InvalidTokenError") {
-      res.status(400).json({ success: false, message: error.message });
-      return;
-    }
-
-    console.error(error);
-    res.status(500).json({ success: false, message: "Unable to verify contact" });
-  }
-});
 
 router.post("/login", async (req, res) => {
   try {
