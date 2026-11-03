@@ -25,6 +25,19 @@ type UserNotification = {
   createdAt: string;
 };
 
+type MarketplaceVehicle = {
+  id: string;
+  make: string;
+  model: string;
+  year: number;
+  dailyRate: number;
+  location: string;
+  description: string;
+  imageUrls: string[];
+  businessName: string;
+  businessPhone: string;
+};
+
 function getInitials(fullName: string) {
   if (!fullName) {
     return "";
@@ -57,6 +70,33 @@ export default function DashboardPage() {
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [pushMessage, setPushMessage] = useState("");
   const [isRegisteringPush, setIsRegisteringPush] = useState(false);
+  const [vehicles, setVehicles] = useState<MarketplaceVehicle[]>([]);
+  const [vehicleError, setVehicleError] = useState("");
+  const [isLoadingVehicles, setIsLoadingVehicles] = useState(true);
+
+  useEffect(() => {
+    async function loadVehicles() {
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
+        const response = await fetch(`${apiUrl}/vehicles`);
+        const result = await response.json() as {
+          success: boolean;
+          message?: string;
+          data?: { vehicles: MarketplaceVehicle[] };
+        };
+        if (!response.ok || !result.success || !result.data) {
+          throw new Error(result.message ?? "Unable to load vehicle listings.");
+        }
+        setVehicles(result.data.vehicles);
+      } catch (error) {
+        setVehicleError(error instanceof Error ? error.message : "Unable to load vehicle listings.");
+      } finally {
+        setIsLoadingVehicles(false);
+      }
+    }
+
+    void Promise.resolve().then(loadVehicles);
+  }, []);
 
   async function loadNotifications() {
     const token = sessionStorage.getItem("drivenow_access_token");
@@ -151,8 +191,8 @@ export default function DashboardPage() {
           <SettingsLink />
           <button onClick={handleLogout} className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>↩️</span> Logout</button>
           <a href="#vehicles" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>▦</span> Browse vehicles</a>
-          <a href="#bookings" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>◷</span> My bookings</a>
-          <a href="#messages" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>□</span> Messages</a>
+          <Link href="/dashboard/bookings" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>◷</span> My bookings</Link>
+          <Link href="/dashboard/messages" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>□</span> Messages</Link>
         </div>
         <div className="mt-auto rounded-2xl bg-[#e9eee7] p-4"><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#c28d27]">For businesses</p><p className="mt-3 text-sm font-semibold leading-5 text-[#123b35]">Create your business profile before listing your vehicles.</p><Link href="/become-a-dealer" className="mt-4 inline-block text-xs font-bold text-[#245c4c]">Become a dealer ↗</Link></div>
       </aside>
@@ -179,14 +219,85 @@ export default function DashboardPage() {
                   Dealer Dashboard
                 </Link>
               )}
+              {!isAuthLoading && user?.role === "customer" && (
+                <Link
+                  href="/dashboard/bookings"
+                  className="rounded-xl bg-[#123b35] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#245c4c] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d9a441]"
+                >
+                  My bookings
+                </Link>
+              )}
             </div>
           </div>
 
           <section className="relative overflow-hidden rounded-[1.75rem] bg-[#123b35] px-7 py-9 text-[#f4f1eb] sm:px-10 sm:py-12"><div className="absolute -right-20 -top-32 h-80 w-80 rounded-full border-[4rem] border-[#d9a441]/20" /><div className="relative"><p className="mb-4 text-xs font-bold uppercase tracking-[0.25em] text-[#d9a441]">Good morning, {firstName}</p><h1 className="max-w-xl text-4xl font-semibold leading-tight tracking-[-0.06em] sm:text-6xl">Find a car that<br /><span className="text-[#d9a441]">fits your plans.</span></h1><p className="mt-5 max-w-md text-sm leading-6 text-[#b8ccc5]">Vehicle listings from trusted local dealers will appear here when they are published.</p></div></section>
 
-          <section className="grid gap-4 py-8 sm:grid-cols-3"><div className="rounded-2xl bg-[#fffdf9] p-5"><p className="text-xs text-[#87928c]">Available today</p><p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[#123b35]">0</p><p className="mt-1 text-xs text-[#245c4c]">Vehicles ready to move</p></div><div className="rounded-2xl bg-[#d9a441] p-5"><p className="text-xs text-[#76571b]">Your bookings</p><p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[#123b35]">0</p><p className="mt-1 text-xs text-[#76571b]">Start your first trip</p></div><div className="rounded-2xl bg-[#e4ded2] p-5"><p className="text-xs text-[#7c6949]">Saved vehicles</p><p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[#123b35]">0</p><p className="mt-1 text-xs text-[#7c6949]">Keep favourites close</p></div></section>
+          <section className="py-8">
+            <div className="max-w-sm rounded-2xl bg-[#fffdf9] p-5">
+              <p className="text-xs text-[#87928c]">Available vehicles</p>
+              <p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-[#123b35]">{vehicles.length}</p>
+              <p className="mt-1 text-xs text-[#245c4c]">Browse cars from trusted local dealers</p>
+            </div>
+          </section>
 
-          <section id="vehicles"><p className="mb-2 text-xs font-bold uppercase tracking-[0.22em] text-[#c28d27]">The marketplace</p><h2 className="text-3xl font-semibold tracking-[-0.05em] text-[#123b35]">Vehicles for you</h2><div className="mt-6 rounded-2xl bg-[#fffdf9] p-8 text-center text-sm text-[#68756f]">No vehicle listings have been published yet.</div></section>
+          <section id="vehicles">
+            <p className="mb-2 text-xs font-bold uppercase tracking-[0.22em] text-[#c28d27]">The marketplace</p>
+            <h2 className="text-3xl font-semibold tracking-[-0.05em] text-[#123b35]">Vehicles for you</h2>
+            {vehicleError ? (
+              <p role="alert" className="mt-6 rounded-2xl bg-red-50 p-6 text-sm text-red-800">{vehicleError}</p>
+            ) : isLoadingVehicles ? (
+              <p role="status" className="mt-6 rounded-2xl bg-[#fffdf9] p-8 text-center text-sm text-[#68756f]">Loading available vehicles…</p>
+            ) : vehicles.length === 0 ? (
+              <div className="mt-6 rounded-2xl bg-[#fffdf9] p-8 text-center text-sm text-[#68756f]">No vehicle listings have been published yet.</div>
+            ) : (
+              <div className="mt-6 grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+                {vehicles.map((vehicle) => (
+                  <article
+                    key={vehicle.id}
+                    className="group relative overflow-hidden rounded-2xl border border-[#e2ded5] bg-[#fffdf9] transition hover:shadow-lg"
+                  >
+                    <Link
+                      href={`/vehicles/${vehicle.id}`}
+                      aria-label={`View details for ${vehicle.year} ${vehicle.make} ${vehicle.model}`}
+                      className="absolute inset-0 z-0 rounded-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d9a441]"
+                    />
+                    <div className="pointer-events-none relative z-10">
+                    <div className="relative block h-52 overflow-hidden bg-[#e9eee7]">
+                      {vehicle.imageUrls[0] ? (
+                        <Image src={vehicle.imageUrls[0]} alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`} fill unoptimized className="object-cover transition duration-300 group-hover:scale-105" />
+                      ) : (
+                        <span className="flex h-full items-center justify-center text-sm text-[#87928c]">No vehicle photo</span>
+                      )}
+                      {vehicle.imageUrls.length > 1 && (
+                        <span className="absolute bottom-3 right-3 rounded-full bg-black/70 px-2.5 py-1 text-xs font-semibold text-white">
+                          +{vehicle.imageUrls.length - 1} photos
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-5">
+                      <h3 className="text-lg font-semibold text-[#123b35]">{vehicle.year} {vehicle.make} {vehicle.model}</h3>
+                      <p className="mt-1 text-sm text-[#68756f]">{vehicle.location} · {vehicle.businessName}</p>
+                      <p className="mt-4 border-t border-[#e9e5dc] pt-4 text-base font-bold text-[#123b35]">
+                        {vehicle.dailyRate.toLocaleString()} FCFA <span className="text-xs font-normal text-[#68756f]">/ day</span>
+                      </p>
+                      <div className="mt-4 grid grid-cols-2 gap-3">
+                        <span className="inline-flex items-center justify-center rounded-xl border border-[#d6dcd5] px-3 py-3 text-sm font-bold text-[#245c4c]">
+                          View details
+                        </span>
+                        <Link
+                          href={`/vehicles/${vehicle.id}#rent`}
+                          className="pointer-events-auto relative z-20 inline-flex items-center justify-center rounded-xl bg-[#123b35] px-3 py-3 text-sm font-bold text-white transition hover:bg-[#245c4c] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d9a441]"
+                        >
+                          Rent now
+                        </Link>
+                      </div>
+                    </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       </section>
       {isPictureOpen && user?.avatarUrl && <div role="dialog" aria-modal="true" aria-label={`${user.fullName}'s profile picture`} onClick={() => setIsPictureOpen(false)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6 backdrop-blur-sm"><button type="button" autoFocus onClick={() => setIsPictureOpen(false)} aria-label="Close full-size profile picture" className="absolute right-5 top-5 rounded-full bg-white/15 px-4 py-2 text-sm font-bold text-white transition hover:bg-white/25">Close ✕</button><div onClick={(event) => event.stopPropagation()} className="flex max-h-[90vh] max-w-[90vw] flex-col items-center gap-4"><Image src={getAvatarSource(user.avatarUrl)} alt={`${user.fullName}'s profile picture`} width={1200} height={1200} unoptimized className="max-h-[82vh] max-w-[88vw] rounded-2xl object-contain shadow-2xl" /><p className="text-sm font-medium text-white">{user.fullName}</p></div></div>}

@@ -1,7 +1,9 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { ZodError } from "zod";
-import { requireAuth, requireRole } from "../auth/auth.middleware.js";
+import { requireAuth, requireRole, type AuthenticatedRequest } from "../auth/auth.middleware.js";
 import { reviewDealerApplicationSchema } from "./admin.schemas.js";
+import { chatIdSchema } from "../chat/chat.schemas.js";
+import { listReportedConversations, reviewReportedConversation } from "../chat/chat.service.js";
 import {
   getAdminDashboardStats,
   listDealerApplications,
@@ -25,6 +27,37 @@ router.get("/dashboard", async (_req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Unable to load the admin dashboard" });
+  }
+});
+
+router.get("/chat-reports", async (_req, res) => {
+  try {
+    const reports = await listReportedConversations();
+    res.status(200).json({ success: true, data: { reports } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Unable to load reported chats." });
+  }
+});
+
+router.get("/chat-reports/:conversationId", async (req, res) => {
+  const parsedId = chatIdSchema.safeParse(req.params.conversationId);
+  if (!parsedId.success) {
+    res.status(400).json({ success: false, message: "Invalid reported conversation." });
+    return;
+  }
+
+  try {
+    const adminId = (req as unknown as AuthenticatedRequest).user.id;
+    const conversation = await reviewReportedConversation(parsedId.data, adminId);
+    if (!conversation) {
+      res.status(404).json({ success: false, message: "Reported conversation not found." });
+      return;
+    }
+    res.status(200).json({ success: true, data: { conversation } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Unable to review reported chat." });
   }
 });
 

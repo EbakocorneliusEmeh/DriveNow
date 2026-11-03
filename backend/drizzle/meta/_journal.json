@@ -50,6 +50,34 @@
       "when": 1793608854551,
       "tag": "0006_square_triton",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793610223203,
+      "tag": "0007_flat_vapor",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793613456213,
+      "tag": "0008_ambitious_deathbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793615691732,
+      "tag": "0009_bouncy_ben_parker",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793617103847,
+      "tag": "0010_wakeful_starbolt",
+      "breakpoints": true
     }
   ]
 }

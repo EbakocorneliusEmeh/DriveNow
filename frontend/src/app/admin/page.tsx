@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import ChatReports from "./ChatReports";
 
 const API_URL = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api"}/admin`;
 
@@ -124,6 +125,8 @@ export default function AdminPage() {
               <StatCard title="Dealer Applications" value={data.stats.dealerApplications} />
               <StatCard title="Pending Applications" value={data.stats.pendingDealerApplications} />
             </div>
+
+            <ChatReports />
 
             {/* Dealer Applications Section */}
             <div className="mt-12">

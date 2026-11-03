@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import VehicleList from "./VehicleList";
+import BookingRequests from "./BookingRequests";
 
 const API_URL = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api"}/dealers`;
 
@@ -115,12 +116,20 @@ export default function DealerDashboardPage() {
           <Link href="/" className="text-xl font-bold tracking-[-0.06em] text-[#123b35]">
             Drive<span className="text-[#d9a441]">Now</span>
           </Link>
-          <Link
-            href="/dashboard"
-            className="rounded-full border border-[#d6dcd5] bg-[#fffdf9] px-4 py-2 text-sm font-semibold text-[#245c4c] transition hover:bg-[#e9eee7]"
-          >
-            Main dashboard
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/dashboard/messages"
+              className="rounded-full border border-[#d6dcd5] bg-[#fffdf9] px-4 py-2 text-sm font-semibold text-[#245c4c] transition hover:bg-[#e9eee7]"
+            >
+              Messages
+            </Link>
+            <Link
+              href="/dashboard"
+              className="rounded-full border border-[#d6dcd5] bg-[#fffdf9] px-4 py-2 text-sm font-semibold text-[#245c4c] transition hover:bg-[#e9eee7]"
+            >
+              Main dashboard
+            </Link>
+          </div>
         </nav>
 
         <section className="mt-8 overflow-hidden rounded-3xl border border-[#e2ded5] bg-[#fffdf9] shadow-sm">
@@ -207,6 +216,7 @@ export default function DealerDashboardPage() {
           </div>
         </section>
 
+        <BookingRequests />
         <VehicleList />
       </div>
     </main>
