@@ -78,6 +78,20 @@
       "when": 1793617103847,
       "tag": "0010_wakeful_starbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793704298090,
+      "tag": "0011_tranquil_quentin_quire",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793710321476,
+      "tag": "0012_vehicle_availability_blocks",
+      "breakpoints": true
     }
   ]
 }

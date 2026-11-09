@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import VehiclePhotoGallery from "@/components/VehiclePhotoGallery";
 
 const API_URL = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api"}/vehicles`;
@@ -16,6 +16,10 @@ type Vehicle = {
   description: string;
   imageUrls: string[];
   status: "draft" | "published";
+  vehicleType?: "sedan" | "suv" | "truck" | "van" | "coupe" | "convertible";
+  transmission?: "automatic" | "manual";
+  fuelType?: "gasoline" | "diesel" | "electric" | "hybrid";
+  seatingCapacity?: number;
 };
 
 type VehiclesResponse = {
@@ -23,6 +27,184 @@ type VehiclesResponse = {
   message?: string;
   data?: { vehicles: Vehicle[] };
 };
+
+type AvailabilityBlock = {
+  id: string;
+  startDate: string;
+  endDate: string;
+};
+
+function VehicleAvailability({ vehicleId }: { vehicleId: string }) {
+  const [blocks, setBlocks] = useState<AvailabilityBlock[]>([]);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [removingId, setRemovingId] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const today = new Date();
+  const minDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+  const loadBlocks = useCallback(async () => {
+    const token = sessionStorage.getItem("drivenow_access_token");
+    if (!token) {
+      setError("Sign in again to manage unavailable dates.");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/${vehicleId}/availability-blocks`, {
+        headers: { Authorization: ["Bearer", token].join(" ") },
+      });
+      const result = await response.json() as {
+        success: boolean;
+        message?: string;
+        data?: { blocks: AvailabilityBlock[] };
+      };
+      if (!response.ok || !result.success || !result.data) {
+        throw new Error(result.message ?? "Unable to load unavailable dates.");
+      }
+      setBlocks(result.data.blocks);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to load unavailable dates.");
+    } finally {
+      setLoading(false);
+    }
+  }, [vehicleId]);
+
+  useEffect(() => {
+    void Promise.resolve().then(loadBlocks);
+  }, [loadBlocks]);
+
+  async function addBlock(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const token = sessionStorage.getItem("drivenow_access_token");
+    if (!token) {
+      setError("Sign in again to block dates.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch(`${API_URL}/${vehicleId}/availability-blocks`, {
+        method: "POST",
+        headers: {
+          Authorization: ["Bearer", token].join(" "),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ startDate, endDate }),
+      });
+      const result = await response.json() as {
+        success: boolean;
+        message?: string;
+        data?: { block: AvailabilityBlock };
+      };
+      if (!response.ok || !result.success || !result.data?.block) {
+        throw new Error(result.message ?? "Unable to block these dates.");
+      }
+      const newBlock = result.data.block;
+      setBlocks((current) => [...current, newBlock].sort((a, b) => a.startDate.localeCompare(b.startDate)));
+      setStartDate("");
+      setEndDate("");
+      setMessage("Dates blocked. Customers can’t request this vehicle for those dates.");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to block these dates.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function reopenBlock(block: AvailabilityBlock) {
+    const token = sessionStorage.getItem("drivenow_access_token");
+    if (!token) {
+      setError("Sign in again to reopen dates.");
+      return;
+    }
+
+    setRemovingId(block.id);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch(`${API_URL}/${vehicleId}/availability-blocks/${block.id}`, {
+        method: "DELETE",
+        headers: { Authorization: ["Bearer", token].join(" ") },
+      });
+      const result = await response.json() as { success: boolean; message?: string };
+      if (!response.ok || !result.success) {
+        throw new Error(result.message ?? "Unable to reopen these dates.");
+      }
+      setBlocks((current) => current.filter((item) => item.id !== block.id));
+      setMessage("Dates reopened for booking.");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to reopen these dates.");
+    } finally {
+      setRemovingId("");
+    }
+  }
+
+  return (
+    <div className="mt-5 rounded-xl bg-[#f4f1eb] p-4">
+      <h4 className="text-sm font-semibold text-[#123b35]">Availability</h4>
+      <form onSubmit={addBlock} className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+        <label className="text-xs font-medium text-[#68756f]">
+          Unavailable from
+          <input
+            type="date"
+            required
+            min={minDate}
+            value={startDate}
+            onChange={(event) => setStartDate(event.target.value)}
+            className="mt-1 block w-full rounded-lg border border-[#d6dcd5] bg-white px-3 py-2 text-sm text-[#18211f]"
+          />
+        </label>
+        <label className="text-xs font-medium text-[#68756f]">
+          Through
+          <input
+            type="date"
+            required
+            min={startDate || minDate}
+            value={endDate}
+            onChange={(event) => setEndDate(event.target.value)}
+            className="mt-1 block w-full rounded-lg border border-[#d6dcd5] bg-white px-3 py-2 text-sm text-[#18211f]"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={saving || loading}
+          className="self-end rounded-lg border border-[#d6dcd5] bg-white px-3 py-2 text-xs font-semibold text-[#245c4c] hover:bg-[#e9eee7] disabled:opacity-60"
+        >
+          {saving ? "Saving…" : "Block dates"}
+        </button>
+      </form>
+      {error && <p role="alert" className="mt-3 text-xs text-red-700">{error}</p>}
+      {message && <p role="status" className="mt-3 text-xs text-[#245c4c]">{message}</p>}
+      {!loading && blocks.length > 0 && (
+        <ul className="mt-3 divide-y divide-[#d6dcd5]">
+          {blocks.map((block) => (
+            <li key={block.id} className="flex items-center justify-between gap-3 py-2 text-xs text-[#68756f]">
+              <span>{block.startDate} through {block.endDate}</span>
+              <button
+                type="button"
+                disabled={removingId === block.id}
+                onClick={() => void reopenBlock(block)}
+                className="shrink-0 font-semibold text-[#245c4c] underline disabled:opacity-60"
+              >
+                {removingId === block.id ? "Reopening…" : "Reopen"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!loading && blocks.length === 0 && (
+        <p className="mt-3 text-xs text-[#87928c]">No unavailable dates set.</p>
+      )}
+    </div>
+  );
+}
 
 export default function VehicleList() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -158,6 +340,7 @@ export default function VehicleList() {
                     </p>
                   </div>
                   <p className="mt-3 line-clamp-2 text-sm leading-5 text-[#68756f]">{vehicle.description}</p>
+                  <VehicleAvailability vehicleId={vehicle.id} />
                   <div className="mt-5 flex flex-wrap gap-2 border-t border-[#e9e5dc] pt-4">
                     <Link href={`/dashboard/dealer/vehicles/${vehicle.id}`} className="rounded-lg border border-[#d6dcd5] px-3 py-2 text-xs font-semibold text-[#245c4c] hover:bg-[#f4f1eb]">
                       Edit

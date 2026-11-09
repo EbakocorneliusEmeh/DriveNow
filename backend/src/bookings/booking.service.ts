@@ -1,6 +1,13 @@
-import { and, desc, eq, gt, lt, or } from "drizzle-orm";
+import { and, desc, eq, gt, gte, lt, or } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { bookings, conversations, dealerProfiles, users, vehicles } from "../db/schema.js";
+import {
+  bookings,
+  conversations,
+  dealerProfiles,
+  users,
+  vehicles,
+  vehicleAvailabilityBlocks,
+} from "../db/schema.js";
 import { createNotification } from "../notifications/notifications.service.js";
 
 function daysBetween(startDate: string, endDate: string) {
@@ -69,6 +76,22 @@ export async function createBookingRequest(input: {
     if (conflictingBooking) {
       const error = new Error("This car already has a booking request for some of those dates.");
       error.name = "BookingDateConflictError";
+      throw error;
+    }
+
+    const [availabilityBlock] = await tx
+      .select({ id: vehicleAvailabilityBlocks.id })
+      .from(vehicleAvailabilityBlocks)
+      .where(and(
+        eq(vehicleAvailabilityBlocks.vehicleId, vehicle.id),
+        lt(vehicleAvailabilityBlocks.startDate, input.endDate),
+        gte(vehicleAvailabilityBlocks.endDate, input.startDate),
+      ))
+      .limit(1);
+
+    if (availabilityBlock) {
+      const error = new Error("The dealer marked some of these dates as unavailable.");
+      error.name = "VehicleAvailabilityBlockConflictError";
       throw error;
     }
 

@@ -7,7 +7,6 @@ import {
   resetPasswordSchema,
   resetRequestSchema,
   updateProfileSchema,
-  verifyTokenSchema,
 } from "./auth.schemas.js";
 import {
   getUserProfile,
@@ -19,7 +18,6 @@ import {
   resetUserPassword,
   updateUserProfile,
   updateUserProfilePicture,
-  verifyUserContact,
 } from "./auth.service.js";
 import { requireAuth, type AuthenticatedRequest } from "./auth.middleware.js";
 import { googleLoginSchema } from "./auth.schemas.js";

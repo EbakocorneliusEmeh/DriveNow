@@ -1,8 +1,197 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gte, gt, ilike, inArray, lt, lte, notExists, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { dealerProfiles, vehicles } from "../db/schema.js";
-import type { VehicleInput } from "./vehicle.schemas.js";
+import { bookings, dealerProfiles, vehicles, vehicleAvailabilityBlocks } from "../db/schema.js";
+import type { AvailabilityBlockInput, VehicleInput, VehicleSearch } from "./vehicle.schemas.js";
+
+export async function searchVehicles(input: VehicleSearch) {
+  const conditions = [
+    eq(vehicles.status, "published"),
+    eq(dealerProfiles.approvalStatus, "approved"),
+  ];
+
+  if (input.priceRange) {
+    conditions.push(gte(vehicles.dailyRate, input.priceRange[0]));
+    conditions.push(lte(vehicles.dailyRate, input.priceRange[1]));
+  }
+  const searchTerms = input.query?.split(/\s+/).filter(Boolean) ?? [];
+  for (const term of searchTerms) {
+    const pattern = `%${term.replace(/[\\%_]/g, "\\$&")}%`;
+    const textMatch = or(
+      ilike(vehicles.make, pattern),
+      ilike(vehicles.model, pattern),
+      ilike(vehicles.location, pattern),
+      ilike(vehicles.description, pattern),
+      ilike(dealerProfiles.businessName, pattern),
+      sql`${vehicles.vehicleType}::text ILIKE ${pattern}`,
+      sql`${vehicles.transmission}::text ILIKE ${pattern}`,
+      sql`${vehicles.fuelType}::text ILIKE ${pattern}`,
+      sql`${vehicles.year}::text ILIKE ${pattern}`,
+      sql`${vehicles.dailyRate}::text ILIKE ${pattern}`,
+      sql`${vehicles.seatingCapacity}::text ILIKE ${pattern}`,
+    );
+    if (textMatch) conditions.push(textMatch);
+  }
+  if (input.pickupDate && input.returnDate) {
+    conditions.push(
+      notExists(
+        db
+          .select({ id: bookings.id })
+          .from(bookings)
+          .where(and(
+            eq(bookings.vehicleId, vehicles.id),
+            inArray(bookings.status, ["pending", "confirmed"]),
+            lt(bookings.startDate, input.returnDate),
+            gt(bookings.endDate, input.pickupDate),
+          )),
+      ),
+    );
+    conditions.push(
+      notExists(
+        db
+          .select({ id: vehicleAvailabilityBlocks.id })
+          .from(vehicleAvailabilityBlocks)
+          .where(and(
+            eq(vehicleAvailabilityBlocks.vehicleId, vehicles.id),
+            lt(vehicleAvailabilityBlocks.startDate, input.returnDate),
+            gte(vehicleAvailabilityBlocks.endDate, input.pickupDate),
+          )),
+      ),
+    );
+  }
+  if (input.vehicleType) {
+    conditions.push(eq(vehicles.vehicleType, input.vehicleType));
+  }
+  if (input.transmission) {
+    conditions.push(eq(vehicles.transmission, input.transmission));
+  }
+  if (input.fuelType) {
+    conditions.push(eq(vehicles.fuelType, input.fuelType));
+  }
+  if (input.seatingCapacity) {
+    conditions.push(gte(vehicles.seatingCapacity, input.seatingCapacity));
+  }
+
+  return db
+    .select({
+      ...vehicleFields,
+      businessName: dealerProfiles.businessName,
+      businessPhone: dealerProfiles.businessPhone,
+    })
+    .from(vehicles)
+    .innerJoin(dealerProfiles, eq(vehicles.dealerProfileId, dealerProfiles.id))
+    .where(and(...conditions))
+    .orderBy(desc(vehicles.createdAt));
+}
+
+export async function listVehicleAvailabilityBlocks(userId: string, vehicleId: string) {
+  const [vehicle] = await db
+    .select({ id: vehicles.id })
+    .from(vehicles)
+    .innerJoin(dealerProfiles, eq(vehicles.dealerProfileId, dealerProfiles.id))
+    .where(and(eq(vehicles.id, vehicleId), eq(dealerProfiles.userId, userId)));
+
+  if (!vehicle) return undefined;
+
+  return db
+    .select({
+      id: vehicleAvailabilityBlocks.id,
+      startDate: vehicleAvailabilityBlocks.startDate,
+      endDate: vehicleAvailabilityBlocks.endDate,
+    })
+    .from(vehicleAvailabilityBlocks)
+    .where(eq(vehicleAvailabilityBlocks.vehicleId, vehicleId))
+    .orderBy(asc(vehicleAvailabilityBlocks.startDate));
+}
+
+export async function addVehicleAvailabilityBlock(
+  userId: string,
+  vehicleId: string,
+  input: AvailabilityBlockInput,
+) {
+  return db.transaction(async (tx) => {
+    const [lockedVehicle] = await tx
+      .select({ id: vehicles.id })
+      .from(vehicles)
+      .where(eq(vehicles.id, vehicleId))
+      .for("update");
+
+    if (!lockedVehicle) return undefined;
+
+    const [ownedVehicle] = await tx
+      .select({ id: vehicles.id })
+      .from(vehicles)
+      .innerJoin(dealerProfiles, eq(vehicles.dealerProfileId, dealerProfiles.id))
+      .where(and(eq(vehicles.id, vehicleId), eq(dealerProfiles.userId, userId)));
+
+    if (!ownedVehicle) return undefined;
+
+    const [conflictingBooking] = await tx
+      .select({ id: bookings.id })
+      .from(bookings)
+      .where(and(
+        eq(bookings.vehicleId, vehicleId),
+        inArray(bookings.status, ["pending", "confirmed"]),
+        lte(bookings.startDate, input.endDate),
+        gt(bookings.endDate, input.startDate),
+      ))
+      .limit(1);
+
+    if (conflictingBooking) {
+      const error = new Error("These dates overlap with a pending or confirmed booking.");
+      error.name = "AvailabilityBlockBookingConflictError";
+      throw error;
+    }
+
+    const [existingBlock] = await tx
+      .select({ id: vehicleAvailabilityBlocks.id })
+      .from(vehicleAvailabilityBlocks)
+      .where(and(
+        eq(vehicleAvailabilityBlocks.vehicleId, vehicleId),
+        lte(vehicleAvailabilityBlocks.startDate, input.endDate),
+        gte(vehicleAvailabilityBlocks.endDate, input.startDate),
+      ))
+      .limit(1);
+
+    if (existingBlock) {
+      const error = new Error("These dates overlap with an existing unavailable period.");
+      error.name = "AvailabilityBlockConflictError";
+      throw error;
+    }
+
+    const [block] = await tx
+      .insert(vehicleAvailabilityBlocks)
+      .values({ vehicleId, ...input })
+      .returning({
+        id: vehicleAvailabilityBlocks.id,
+        startDate: vehicleAvailabilityBlocks.startDate,
+        endDate: vehicleAvailabilityBlocks.endDate,
+      });
+
+    return block;
+  });
+}
+
+export async function removeVehicleAvailabilityBlock(userId: string, vehicleId: string, blockId: string) {
+  const [vehicle] = await db
+    .select({ id: vehicles.id })
+    .from(vehicles)
+    .innerJoin(dealerProfiles, eq(vehicles.dealerProfileId, dealerProfiles.id))
+    .where(and(eq(vehicles.id, vehicleId), eq(dealerProfiles.userId, userId)));
+
+  if (!vehicle) return undefined;
+
+  const [block] = await db
+    .delete(vehicleAvailabilityBlocks)
+    .where(and(
+      eq(vehicleAvailabilityBlocks.id, blockId),
+      eq(vehicleAvailabilityBlocks.vehicleId, vehicleId),
+    ))
+    .returning({ id: vehicleAvailabilityBlocks.id });
+
+  return block;
+}
+
 
 const vehicleFields = {
   id: vehicles.id,

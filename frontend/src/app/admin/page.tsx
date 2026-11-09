@@ -42,9 +42,9 @@ type ApiResponse = {
 
 function StatCard({ title, value }: { title: string; value: number }) {
   return (
-    <div className="rounded-lg bg-white p-6 shadow">
-      <p className="text-sm font-medium text-gray-500">{title}</p>
-      <p className="mt-2 text-3xl font-bold text-gray-900">{value}</p>
+    <div className="rounded-2xl border border-[#e2ded5] bg-[#fffdf9] p-6 shadow-sm">
+      <p className="text-sm font-medium uppercase tracking-[0.18em] text-[#87928c]">{title}</p>
+      <p className="mt-3 text-3xl font-bold text-[#123b35]">{value}</p>
     </div>
   );
 }
@@ -110,10 +110,21 @@ export default function AdminPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 p-8">
+    <main className="min-h-screen bg-[#f4f1eb] p-8 text-[#18211f]">
       <div className="mx-auto max-w-7xl">
-        <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
-        <p className="mt-2 text-gray-600">Oversee users, dealer applications, and system activity.</p>
+        <div className="mb-8 flex items-center justify-between gap-4 rounded-[1.5rem] bg-[#123b35] px-6 py-5 text-[#f4f1eb] shadow-sm">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.22em] text-[#d9a441]">DriveNow</p>
+            <h1 className="mt-2 text-3xl font-bold text-white">Admin Dashboard</h1>
+          </div>
+          <a
+            href="/dashboard"
+            className="rounded-xl border border-[#d9a441]/50 bg-[#d9a441] px-4 py-2 text-sm font-bold text-[#123b35] transition hover:bg-[#e7b95b]"
+          >
+            Back to dashboard
+          </a>
+        </div>
+        <p className="mt-2 text-[#68756f]">Oversee users, dealer applications, and system activity.</p>
 
         {message && <p className="mt-8 text-center text-gray-500">{message}</p>}
 
@@ -176,13 +187,13 @@ export default function AdminPage() {
                             <div className="flex justify-end space-x-2">
                               <button
                                 onClick={() => handleReviewApplication(app.id, "approved")}
-                                className="rounded bg-green-600 px-3 py-1 text-white hover:bg-green-700"
+                                className="rounded bg-[#123b35] px-3 py-1 text-white hover:bg-[#245c4c]"
                               >
                                 Approve
                               </button>
                               <button
                                 onClick={() => handleReviewApplication(app.id, "rejected")}
-                                className="rounded bg-red-600 px-3 py-1 text-white hover:bg-red-700"
+                                className="rounded bg-[#943d22] px-3 py-1 text-white hover:bg-[#a94e34]"
                               >
                                 Reject
                               </button>

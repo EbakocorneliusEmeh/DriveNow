@@ -16,6 +16,10 @@ type VehicleForm = {
   location: string;
   description: string;
   imageUrls: string[];
+  vehicleType?: "sedan" | "suv" | "truck" | "van" | "coupe" | "convertible";
+  transmission?: "automatic" | "manual";
+  fuelType?: "gasoline" | "diesel" | "electric" | "hybrid";
+  seatingCapacity?: number;
 };
 
 type Vehicle = Omit<VehicleForm, "imageUrlsText"> & {

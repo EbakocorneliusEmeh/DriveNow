@@ -23,6 +23,10 @@ type Vehicle = {
   businessEmail: string;
   businessAddress: string;
   dealerLogoUrl: string | null;
+  vehicleType?: "sedan" | "suv" | "truck" | "van" | "coupe" | "convertible";
+  transmission?: "automatic" | "manual";
+  fuelType?: "gasoline" | "diesel" | "electric" | "hybrid";
+  seatingCapacity?: number;
 };
 
 type VehicleResponse = {
@@ -30,6 +34,21 @@ type VehicleResponse = {
   message?: string;
   data?: { vehicle: Vehicle };
 };
+
+type BookingConfirmation = {
+  id: string;
+  startDate: string;
+  endDate: string;
+  totalDays: number;
+  estimatedTotal: number;
+  status: "pending" | "confirmed";
+};
+
+function isDateOnly(value: string | null): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsedDate = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === value;
+}
 
 export default function VehicleDetailsPage() {
   const { vehicleId } = useParams<{ vehicleId: string }>();
@@ -42,7 +61,7 @@ export default function VehicleDetailsPage() {
   const [endDate, setEndDate] = useState("");
   const [message, setMessage] = useState("");
   const [bookingError, setBookingError] = useState("");
-  const [bookingSuccess, setBookingSuccess] = useState("");
+  const [bookingConfirmation, setBookingConfirmation] = useState<BookingConfirmation | null>(null);
   const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
 
   useEffect(() => {
@@ -54,6 +73,17 @@ export default function VehicleDetailsPage() {
           throw new Error(result.message ?? "Unable to load this vehicle.");
         }
         setVehicle(result.data.vehicle);
+        const searchParams = new URLSearchParams(window.location.search);
+        const requestedPickupDate = searchParams.get("pickupDate");
+        const requestedReturnDate = searchParams.get("returnDate");
+        if (
+          isDateOnly(requestedPickupDate)
+          && isDateOnly(requestedReturnDate)
+          && requestedReturnDate > requestedPickupDate
+        ) {
+          setStartDate(requestedPickupDate);
+          setEndDate(requestedReturnDate);
+        }
       } catch (caughtError) {
         setError(caughtError instanceof Error ? caughtError.message : "Unable to load this vehicle.");
       } finally {
@@ -96,7 +126,7 @@ export default function VehicleDetailsPage() {
   async function submitBooking(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBookingError("");
-    setBookingSuccess("");
+    setBookingConfirmation(null);
 
     const token = sessionStorage.getItem("drivenow_access_token");
     if (!token) {
@@ -114,11 +144,15 @@ export default function VehicleDetailsPage() {
         },
         body: JSON.stringify({ vehicleId, startDate, endDate, message }),
       });
-      const result = await response.json() as { success: boolean; message?: string };
-      if (!response.ok || !result.success) {
+      const result = await response.json() as {
+        success: boolean;
+        message?: string;
+        data?: { booking: BookingConfirmation };
+      };
+      if (!response.ok || !result.success || !result.data?.booking) {
         throw new Error(result.message ?? "Unable to send your rental request.");
       }
-      setBookingSuccess(result.message ?? "Your request has been sent to the dealer.");
+      setBookingConfirmation(result.data.booking);
       setStartDate("");
       setEndDate("");
       setMessage("");
@@ -269,14 +303,24 @@ export default function VehicleDetailsPage() {
                   </p>
                 )}
                 {bookingError && <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-800">{bookingError}</p>}
-                {bookingSuccess && (
-                  <p role="status" className="rounded-xl bg-[#e6f2e8] p-4 text-sm leading-6 text-[#245c4c]">
-                    {bookingSuccess}{" "}
-                    <Link href="/dashboard/bookings" className="font-bold underline">
-                      View your bookings
-                    </Link>
-                    .
-                  </p>
+                {bookingConfirmation && (
+                  <div role="status" className="rounded-xl border border-[#b8d7c0] bg-[#e6f2e8] p-4 text-sm leading-6 text-[#245c4c]">
+                    <p className="font-bold">
+                      {bookingConfirmation.status === "pending" ? "Request sent to the dealer" : "Booking confirmed"}
+                    </p>
+                    <p className="mt-1">
+                      {bookingConfirmation.startDate} to {bookingConfirmation.endDate} · {bookingConfirmation.totalDays} {bookingConfirmation.totalDays === 1 ? "day" : "days"} · Estimated total {bookingConfirmation.estimatedTotal.toLocaleString()} FCFA
+                    </p>
+                    <p className="mt-2">
+                      {bookingConfirmation.status === "pending"
+                        ? "Your rental is not confirmed until the dealer responds."
+                        : "Your rental is confirmed."}{" "}
+                      <Link href="/dashboard/bookings" className="font-bold underline">
+                        View your bookings
+                      </Link>
+                      .
+                    </p>
+                  </div>
                 )}
                 <button
                   type="submit"

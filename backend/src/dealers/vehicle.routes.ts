@@ -4,17 +4,43 @@ import { ZodError } from "zod";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../auth/auth.middleware.js";
 import {
   addVehicleImage,
+  addVehicleAvailabilityBlock,
   createVehicle,
   deleteVehicle,
   getPublishedVehicle,
+  listVehicleAvailabilityBlocks,
   listDealerVehicles,
   listPublishedVehicles,
+  removeVehicleAvailabilityBlock,
+  searchVehicles,
   setVehicleStatus,
   updateVehicle,
 } from "./vehicle.service.js";
-import { vehicleIdSchema, vehicleInputSchema, vehicleStatusSchema } from "./vehicle.schemas.js";
+import {
+  availabilityBlockIdSchema,
+  availabilityBlockSchema,
+  vehicleIdSchema,
+  vehicleInputSchema,
+  vehicleSearchSchema,
+  vehicleStatusSchema,
+} from "./vehicle.schemas.js";
 
 const router: ExpressRouter = Router();
+
+router.post("/search", async (req, res) => {
+  try {
+    const input = vehicleSearchSchema.parse(req.body);
+    const vehicles = await searchVehicles(input);
+    res.status(200).json({ success: true, data: { vehicles } });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      res.status(400).json({ success: false, message: "Invalid search criteria." });
+      return;
+    }
+    console.error(error);
+    res.status(500).json({ success: false, message: "Unable to search for vehicles." });
+  }
+});
 
 function authenticatedUserId(req: Request) {
   return (req as Request & AuthenticatedRequest).user.id;
@@ -59,6 +85,87 @@ router.get("/mine", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Unable to load your vehicle inventory." });
+  }
+});
+
+router.get("/:vehicleId/availability-blocks", async (req, res) => {
+  const parsedVehicleId = vehicleIdSchema.safeParse(req.params.vehicleId);
+  if (!parsedVehicleId.success) {
+    res.status(400).json({ success: false, message: "Invalid vehicle listing." });
+    return;
+  }
+
+  try {
+    const blocks = await listVehicleAvailabilityBlocks(authenticatedUserId(req), parsedVehicleId.data);
+    if (!blocks) {
+      res.status(404).json({ success: false, message: "Vehicle listing not found." });
+      return;
+    }
+    res.status(200).json({ success: true, data: { blocks } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Unable to load unavailable dates." });
+  }
+});
+
+router.post("/:vehicleId/availability-blocks", async (req, res) => {
+  const parsedVehicleId = vehicleIdSchema.safeParse(req.params.vehicleId);
+  if (!parsedVehicleId.success) {
+    res.status(400).json({ success: false, message: "Invalid vehicle listing." });
+    return;
+  }
+
+  try {
+    const input = availabilityBlockSchema.parse(req.body);
+    const block = await addVehicleAvailabilityBlock(
+      authenticatedUserId(req),
+      parsedVehicleId.data,
+      input,
+    );
+    if (!block) {
+      res.status(404).json({ success: false, message: "Vehicle listing not found." });
+      return;
+    }
+    res.status(201).json({ success: true, data: { block } });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      res.status(400).json({ success: false, message: error.issues[0]?.message ?? "Choose valid unavailable dates." });
+      return;
+    }
+    if (error instanceof Error && (
+      error.name === "AvailabilityBlockBookingConflictError"
+      || error.name === "AvailabilityBlockConflictError"
+    )) {
+      res.status(409).json({ success: false, message: error.message });
+      return;
+    }
+    console.error(error);
+    res.status(500).json({ success: false, message: "Unable to block these dates." });
+  }
+});
+
+router.delete("/:vehicleId/availability-blocks/:blockId", async (req, res) => {
+  const parsedVehicleId = vehicleIdSchema.safeParse(req.params.vehicleId);
+  const parsedBlockId = availabilityBlockIdSchema.safeParse(req.params.blockId);
+  if (!parsedVehicleId.success || !parsedBlockId.success) {
+    res.status(400).json({ success: false, message: "Invalid unavailable date period." });
+    return;
+  }
+
+  try {
+    const block = await removeVehicleAvailabilityBlock(
+      authenticatedUserId(req),
+      parsedVehicleId.data,
+      parsedBlockId.data,
+    );
+    if (!block) {
+      res.status(404).json({ success: false, message: "Unavailable date period not found." });
+      return;
+    }
+    res.status(200).json({ success: true, message: "Dates are available for booking again." });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Unable to reopen these dates." });
   }
 });
 

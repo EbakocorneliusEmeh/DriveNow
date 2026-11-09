@@ -1,5 +1,5 @@
 import { getApps, initializeApp, type FirebaseOptions } from "firebase/app";
-import { getMessaging, isSupported, onRegistered, register } from "firebase/messaging";
+import { getMessaging, isSupported, onMessage, onRegistered, register } from "firebase/messaging";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -64,4 +64,17 @@ export async function registerForPushNotifications() {
     stopListening();
     throw error;
   }
+}
+
+export function listenForForegroundNotifications() {
+  if (typeof window === "undefined" || !("Notification" in window)) return;
+  onMessage(getMessaging(getFirebaseApp()), (payload) => {
+    const { title, ...options } = payload.notification ?? {};
+    if (!title) return;
+    const notification = new Notification(title, options);
+    notification.onclick = (event) => {
+      event.preventDefault();
+      window.open(payload.fcmOptions?.link, "_blank");
+    };
+  });
 }

@@ -26,6 +26,10 @@ export const dealerApprovalStatus = pgEnum("dealer_approval_status", [
 export const vehicleListingStatus = pgEnum("vehicle_listing_status", ["draft", "published"]);
 export const bookingStatus = pgEnum("booking_status", ["pending", "confirmed", "declined", "cancelled"]);
 
+export const vehicleType = pgEnum("vehicle_type", ["sedan", "suv", "truck", "van", "coupe", "convertible"]);
+export const transmissionType = pgEnum("transmission_type", ["automatic", "manual"]);
+export const fuelType = pgEnum("fuel_type", ["gasoline", "diesel", "electric", "hybrid"]);
+
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
   fullName: text("full_name").notNull(),
@@ -109,6 +113,10 @@ export const vehicles = pgTable("vehicles", {
   location: text("location").notNull(),
   description: text("description").notNull(),
   imageUrls: jsonb("image_urls").$type<string[]>().notNull(),
+  vehicleType: vehicleType("vehicle_type"),
+  transmission: transmissionType("transmission"),
+  fuelType: fuelType("fuel_type"),
+  seatingCapacity: integer("seating_capacity"),
   status: vehicleListingStatus("status").default("draft").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
@@ -137,6 +145,18 @@ export const bookings = pgTable("bookings", {
     .defaultNow()
     .notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const vehicleAvailabilityBlocks = pgTable("vehicle_availability_blocks", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  vehicleId: uuid("vehicle_id")
+    .references(() => vehicles.id, { onDelete: "cascade" })
+    .notNull(),
+  startDate: date("start_date").notNull(),
+  endDate: date("end_date").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
 });

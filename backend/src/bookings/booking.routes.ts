@@ -56,6 +56,10 @@ router.post("/", requireRole("customer"), async (req, res) => {
       res.status(409).json({ success: false, message: error.message });
       return;
     }
+    if (error instanceof Error && error.name === "VehicleAvailabilityBlockConflictError") {
+      res.status(409).json({ success: false, message: error.message });
+      return;
+    }
     console.error(error);
     res.status(500).json({ success: false, message: "Unable to send your rental request." });
   }
