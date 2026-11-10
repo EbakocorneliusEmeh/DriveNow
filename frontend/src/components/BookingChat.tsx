@@ -280,7 +280,9 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
           return (
             <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
               <article className={`max-w-[85%] rounded-2xl px-4 py-3 sm:max-w-[70%] ${mine ? "rounded-br-md bg-[#123b35] text-white" : "rounded-bl-md border border-[#e2ded5] bg-white text-[#18211f]"}`}>
-                {!mine && <p className="mb-1 text-xs font-bold text-[#245c4c]">{message.senderName}</p>}
+                <p className={`mb-1 text-xs font-bold ${mine ? "text-white/75" : "text-[#245c4c]"}`}>
+                  {message.senderName}
+                </p>
                 <p className="whitespace-pre-wrap break-words text-sm leading-6">{message.body}</p>
                 <time dateTime={message.createdAt} className={`mt-2 block text-right text-[10px] ${mine ? "text-white/70" : "text-[#87928c]"}`}>
                   {new Date(message.createdAt).toLocaleString()}

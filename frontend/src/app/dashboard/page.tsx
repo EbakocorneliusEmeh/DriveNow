@@ -2,14 +2,17 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { io } from "socket.io-client";
 import { registerForPushNotifications } from "@/lib/firebase-messaging";
 import SettingsLink from "@/components/SettingsLink";
 import { useAuth } from "@/hooks/useAuth";
 import Search, { type VehicleSearchCriteria } from "./Search";
 
 const API_ORIGIN = "http://localhost:4000";
+const NOTIFICATIONS_API_URL = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api"}/notifications`;
+const SOCKET_URL = new URL(NOTIFICATIONS_API_URL).origin;
 
 type CurrentUser = {
   fullName: string;
@@ -140,16 +143,36 @@ export default function DashboardPage() {
     }
   }
 
-  async function loadNotifications() {
+  const loadNotifications = useCallback(async () => {
     const token = sessionStorage.getItem("drivenow_access_token");
     if (!token) return;
-    const response = await fetch("http://localhost:4000/api/notifications", {
+    const response = await fetch(NOTIFICATIONS_API_URL, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) throw new Error("Could not load notifications.");
     const result = await response.json() as { success: boolean; data?: { notifications: UserNotification[] } };
     if (result.success) setNotifications(result.data?.notifications ?? []);
-  }
+  }, []);
+
+  const userId = user?.id;
+
+  useEffect(() => {
+    if (isAuthLoading || !userId) return;
+
+    const token = sessionStorage.getItem("drivenow_access_token");
+    if (!token) return;
+
+    const refreshNotifications = () => {
+      void loadNotifications().catch(() => setPushMessage("Could not load notifications."));
+    };
+    refreshNotifications();
+
+    const socket = io(SOCKET_URL, { auth: { token }, transports: ["websocket", "polling"] });
+    socket.on("chat:inbox-updated", refreshNotifications);
+    return () => {
+      socket.disconnect();
+    };
+  }, [isAuthLoading, loadNotifications, userId]);
 
   async function enableNotifications() {
     const token = sessionStorage.getItem("drivenow_access_token");
@@ -158,7 +181,7 @@ export default function DashboardPage() {
     setPushMessage("");
     try {
       const installationId = await registerForPushNotifications();
-      const response = await fetch("http://localhost:4000/api/notifications/installation", {
+      const response = await fetch(`${NOTIFICATIONS_API_URL}/installation`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ installationId }),
@@ -175,7 +198,7 @@ export default function DashboardPage() {
   async function openNotification(item: UserNotification) {
     const token = sessionStorage.getItem("drivenow_access_token");
     if (token && !item.readAt) {
-      await fetch(`http://localhost:4000/api/notifications/${item.id}/read`, {
+      await fetch(`${NOTIFICATIONS_API_URL}/${item.id}/read`, {
         method: "PATCH",
         headers: { Authorization: `Bearer ${token}` },
       });
