@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
+import { useUnreadChatCount } from "@/hooks/useUnreadChatCount";
 import VehicleList from "./VehicleList";
 import BookingRequests from "./BookingRequests";
 
@@ -29,6 +30,7 @@ type ProfileResponse = {
 
 export default function DealerDashboardPage() {
   const { role, isLoading } = useAuth();
+  const { count: unreadMessageCount, error: unreadMessagesError } = useUnreadChatCount(role === "dealer");
   const router = useRouter();
   const [profile, setProfile] = useState<DealerProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -121,7 +123,11 @@ export default function DealerDashboardPage() {
               href="/dashboard/messages"
               className="rounded-full border border-[#d6dcd5] bg-[#fffdf9] px-4 py-2 text-sm font-semibold text-[#245c4c] transition hover:bg-[#e9eee7]"
             >
-              Messages
+              Messages{unreadMessageCount > 0 && (
+                <span className="ml-2 rounded-full bg-[#d9a441] px-2 py-0.5 text-[10px] font-bold text-[#18211f]">
+                  {unreadMessageCount > 99 ? "99+" : unreadMessageCount}
+                </span>
+              )}
             </Link>
             <Link
               href="/dashboard"
@@ -131,6 +137,7 @@ export default function DealerDashboardPage() {
             </Link>
           </div>
         </nav>
+        {unreadMessagesError && <p role="alert" className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{unreadMessagesError}</p>}
 
         <section className="mt-8 overflow-hidden rounded-3xl border border-[#e2ded5] bg-[#fffdf9] shadow-sm">
           <div className="relative z-0 flex h-80 items-center justify-center overflow-hidden bg-gradient-to-br from-[#123b35] via-[#245c4c] to-[#527866] sm:h-[30rem]">

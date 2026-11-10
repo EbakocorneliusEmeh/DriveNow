@@ -99,6 +99,13 @@
       "when": 1794292773922,
       "tag": "0013_flippant_tusk",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794302935211,
+      "tag": "0014_common_franklin_storm",
+      "breakpoints": true
     }
   ]
 }

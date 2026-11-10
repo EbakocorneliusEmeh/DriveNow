@@ -7,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -29,6 +30,7 @@ export const bookingStatus = pgEnum("booking_status", ["pending", "confirmed", "
 export const vehicleType = pgEnum("vehicle_type", ["sedan", "suv", "truck", "van", "coupe", "convertible"]);
 export const transmissionType = pgEnum("transmission_type", ["automatic", "manual"]);
 export const fuelType = pgEnum("fuel_type", ["gasoline", "diesel", "electric", "hybrid"]);
+export const presenceVisibility = pgEnum("presence_visibility", ["everyone", "contacts", "nobody"]);
 
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -39,6 +41,8 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash"),
   googleId: text("google_id").unique(),
   role: userRole("role").default("customer").notNull(),
+  presenceVisibility: presenceVisibility("presence_visibility").default("contacts").notNull(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
   emailVerified: boolean("email_verified").default(false).notNull(),
   phoneVerified: boolean("phone_verified").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -191,12 +195,16 @@ export const chatMessages = pgTable("chat_messages", {
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   body: text("body").notNull(),
+  clientMessageId: uuid("client_message_id"),
   deliveredAt: timestamp("delivered_at", { withTimezone: true }),
   readAt: timestamp("read_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
-});
+}, (table) => [
+  uniqueIndex("chat_messages_sender_client_message_id_unique")
+    .on(table.senderId, table.clientMessageId),
+]);
 
 export const chatReviewLogs = pgTable("chat_review_logs", {
   id: uuid("id").defaultRandom().primaryKey(),

@@ -29,10 +29,15 @@ type ConversationSummary = {
   } | null;
 };
 
+type PresenceVisibility = "everyone" | "contacts" | "nobody";
+
 export default function MessagesInbox() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [presenceVisibility, setPresenceVisibility] = useState<PresenceVisibility>("contacts");
+  const [isSavingPresence, setIsSavingPresence] = useState(false);
+  const [presenceError, setPresenceError] = useState("");
 
   const loadConversations = useCallback(async () => {
     const token = sessionStorage.getItem("drivenow_access_token");
@@ -44,6 +49,7 @@ export default function MessagesInbox() {
 
     try {
       const response = await fetch(API_URL, {
+        cache: "no-store",
         headers: { Authorization: `Bearer ${token}` },
       });
       const result = await response.json() as {
@@ -68,6 +74,74 @@ export default function MessagesInbox() {
   }, [loadConversations]);
 
   useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(async () => {
+      const token = sessionStorage.getItem("drivenow_access_token");
+      if (!token) return;
+      try {
+        const response = await fetch(`${API_URL}/presence`, {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const result = await response.json() as {
+          success: boolean;
+          message?: string;
+          data?: { visibility: PresenceVisibility };
+        };
+        if (!response.ok || !result.success || !result.data) {
+          throw new Error(result.message ?? "Unable to load presence settings.");
+        }
+        if (active) setPresenceVisibility(result.data.visibility);
+      } catch (caughtError) {
+        if (active) setPresenceError(caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to load presence settings.");
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function changePresenceVisibility(visibility: PresenceVisibility) {
+    const token = sessionStorage.getItem("drivenow_access_token");
+    if (!token) {
+      setPresenceError("Sign in again to change presence privacy.");
+      return;
+    }
+
+    setIsSavingPresence(true);
+    setPresenceError("");
+    try {
+      const response = await fetch(`${API_URL}/presence`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ visibility }),
+      });
+      const result = await response.json() as {
+        success: boolean;
+        message?: string;
+        data?: { visibility: PresenceVisibility };
+      };
+      if (!response.ok || !result.success || !result.data) {
+        throw new Error(result.message ?? "Unable to update presence privacy.");
+      }
+      setPresenceVisibility(result.data.visibility);
+    } catch (caughtError) {
+      setPresenceError(caughtError instanceof Error
+        ? caughtError.message
+        : "Unable to update presence privacy.");
+    } finally {
+      setIsSavingPresence(false);
+    }
+  }
+
+  const unreadTotal = conversations.reduce((total, item) => total + item.unreadCount, 0);
+
+  useEffect(() => {
     let socket: ReturnType<typeof io> | undefined;
     void Promise.resolve().then(() => {
       const token = sessionStorage.getItem("drivenow_access_token");
@@ -85,20 +159,46 @@ export default function MessagesInbox() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="mb-2 text-xs font-bold uppercase tracking-[0.22em] text-[#c28d27]">Messages</p>
-          <h1 className="text-3xl font-semibold tracking-[-0.05em] text-[#123b35] sm:text-4xl">Your conversations</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-3xl font-semibold tracking-[-0.05em] text-[#123b35] sm:text-4xl">Your conversations</h1>
+            {unreadTotal > 0 && (
+              <span className="rounded-full bg-[#d9a441] px-3 py-1 text-xs font-bold text-[#18211f]">
+                {unreadTotal} unread
+              </span>
+            )}
+          </div>
           <p className="mt-2 text-sm text-[#68756f]">Messages stay connected to the booking and car they’re about.</p>
         </div>
-        <button
-          type="button"
-          onClick={() => { setLoading(true); void loadConversations(); }}
-          disabled={loading}
-          className="rounded-xl border border-[#d6dcd5] bg-[#fffdf9] px-4 py-2.5 text-sm font-semibold text-[#245c4c] transition hover:bg-[#e9eee7] disabled:opacity-60"
-        >
-          {loading ? "Refreshing…" : "Refresh"}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-xs font-semibold text-[#68756f]">
+            Presence
+            <select
+              value={presenceVisibility}
+              onChange={(event) => void changePresenceVisibility(event.target.value as PresenceVisibility)}
+              disabled={isSavingPresence}
+              className="rounded-lg border border-[#d6dcd5] bg-[#fffdf9] px-2.5 py-2 text-sm text-[#123b35] disabled:opacity-60"
+            >
+              <option value="everyone">Everyone</option>
+              <option value="contacts">Contacts only</option>
+              <option value="nobody">Nobody</option>
+            </select>
+          </label>
+          <p className="w-full text-right text-xs text-[#87928c]">
+            Contacts are people in your approved booking conversations.
+          </p>
+          <button
+            type="button"
+            onClick={() => { setLoading(true); void loadConversations(); }}
+            disabled={loading}
+            className="rounded-xl border border-[#d6dcd5] bg-[#fffdf9] px-4 py-2.5 text-sm font-semibold text-[#245c4c] transition hover:bg-[#e9eee7] disabled:opacity-60"
+          >
+            {loading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {error && <p role="alert" className="mt-5 rounded-xl bg-red-50 p-4 text-sm text-red-800">{error}</p>}
+      {presenceError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-xs text-red-800">{presenceError}</p>}
       {loading ? (
         <p role="status" className="mt-6 rounded-2xl bg-[#fffdf9] p-8 text-center text-sm text-[#68756f]">Loading your conversations…</p>
       ) : conversations.length === 0 ? (

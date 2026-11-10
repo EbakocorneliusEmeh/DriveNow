@@ -5,6 +5,13 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { io, type Socket } from "socket.io-client";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  listQueuedMessages,
+  removeQueuedMessage,
+  saveQueuedMessage,
+  updateQueuedMessageStatus,
+  type QueuedChatMessage,
+} from "@/lib/chat-outbox";
 
 const API_URL = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api"}/chat`;
 const SOCKET_URL = new URL(API_URL).origin;
@@ -17,6 +24,8 @@ type ChatMessage = {
   createdAt: string;
   deliveredAt: string | null;
   readAt: string | null;
+  clientMessageId: string | null;
+  sendState: "pending" | "sent" | "failed";
 };
 
 type ChatReceipt = Pick<ChatMessage, "id" | "deliveredAt" | "readAt">;
@@ -51,10 +60,29 @@ type ApiResponse = {
 type SocketAck = {
   success: boolean;
   message?: string;
+  data?: { message: ChatMessage };
+  presence?: PresenceUpdate | null;
 };
+
+type PresenceUpdate = {
+  userId: string;
+  visibility: "everyone" | "contacts" | "nobody";
+  online: boolean;
+  lastSeenAt: string | null;
+};
+
+function upsertMessage(messages: ChatMessage[], incoming: ChatMessage) {
+  const index = messages.findIndex((message) => message.id === incoming.id
+    || Boolean(incoming.clientMessageId && message.clientMessageId === incoming.clientMessageId));
+  if (index < 0) return [...messages, incoming];
+  return messages.map((message, itemIndex) => itemIndex === index
+    ? { ...message, ...incoming }
+    : message);
+}
 
 export default function BookingChat({ bookingId }: { bookingId: string }) {
   const { user, role, isLoading: isAuthLoading } = useAuth();
+  const userId = user?.id;
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageText, setMessageText] = useState("");
@@ -66,10 +94,21 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
   const [reportReason, setReportReason] = useState("");
   const [reporting, setReporting] = useState(false);
   const [reportMessage, setReportMessage] = useState("");
+  const [outboxError, setOutboxError] = useState("");
+  const [isOtherTyping, setIsOtherTyping] = useState(false);
+  const [presence, setPresence] = useState<PresenceUpdate | null>(null);
   const socketRef = useRef<Socket | null>(null);
+  const joinedConversationRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const retryingMessagesRef = useRef(new Set<string>());
+  const typingActiveRef = useRef(false);
+  const typingStartTimerRef = useRef<number | null>(null);
+  const typingStopTimerRef = useRef<number | null>(null);
+  const typingHeartbeatRef = useRef<number | null>(null);
+  const typingIndicatorTimerRef = useRef<number | null>(null);
 
   const loadConversation = useCallback(async () => {
+    if (!userId) return;
     const token = sessionStorage.getItem("drivenow_access_token");
     if (!token) {
       setError("Sign in to open this booking conversation.");
@@ -79,30 +118,127 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
 
     try {
       const response = await fetch(`${API_URL}/bookings/${bookingId}`, {
+        cache: "no-store",
         headers: { Authorization: `Bearer ${token}` },
       });
       const result = await response.json() as ApiResponse;
       if (!response.ok || !result.success || !result.data?.conversation) {
         throw new Error(result.message ?? "Unable to load this conversation.");
       }
+      const savedMessages = result.data.conversation.messages.map((message) => ({
+        ...message,
+        sendState: "sent" as const,
+      }));
+      const queuedMessages = await listQueuedMessages(userId, result.data.conversation.conversationId);
+      const loadedClientMessageIds = new Set(savedMessages.map((message) => message.clientMessageId).filter(Boolean));
+      const unsentQueuedMessages: QueuedChatMessage[] = [];
+      for (const queuedMessage of queuedMessages) {
+        if (loadedClientMessageIds.has(queuedMessage.clientMessageId)) {
+          await removeQueuedMessage(queuedMessage.key);
+        } else {
+          unsentQueuedMessages.push(queuedMessage);
+        }
+      }
+      setMessages([
+        ...savedMessages,
+        ...unsentQueuedMessages.map((message) => ({
+          id: message.clientMessageId,
+          clientMessageId: message.clientMessageId,
+          senderId: userId,
+          senderName: user?.fullName ?? "You",
+          body: message.body,
+          createdAt: message.createdAt,
+          deliveredAt: null,
+          readAt: null,
+          sendState: message.status,
+        })),
+      ]);
       setConversation(result.data.conversation);
-      setMessages(result.data.conversation.messages);
       setError("");
+      setOutboxError("");
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Unable to load this conversation.");
     } finally {
       setLoading(false);
     }
-  }, [bookingId]);
+  }, [bookingId, user?.fullName, userId]);
 
   useEffect(() => {
+    if (isAuthLoading || !userId) return;
     void Promise.resolve().then(loadConversation);
-  }, [loadConversation]);
+  }, [isAuthLoading, loadConversation, userId]);
+
+  const retryQueuedMessage = useCallback(async (queuedMessage: QueuedChatMessage) => {
+    const socket = socketRef.current;
+    if (!socket?.connected || !joinedConversationRef.current) {
+      setSending(false);
+      setError("Message is saved on this device and will retry when you reconnect.");
+      return;
+    }
+    if (retryingMessagesRef.current.has(queuedMessage.clientMessageId)) return;
+
+    retryingMessagesRef.current.add(queuedMessage.clientMessageId);
+    try {
+      await updateQueuedMessageStatus(queuedMessage.key, "pending");
+      setMessages((current) => current.map((message) => message.clientMessageId === queuedMessage.clientMessageId
+        ? { ...message, sendState: "pending" }
+        : message));
+    } catch (caughtError) {
+      retryingMessagesRef.current.delete(queuedMessage.clientMessageId);
+      setSending(false);
+      setOutboxError(caughtError instanceof Error ? caughtError.message : "Could not update the local message queue.");
+      return;
+    }
+
+    socket.timeout(12_000).emit(
+      "chat:send",
+      {
+        conversationId: queuedMessage.conversationId,
+        clientMessageId: queuedMessage.clientMessageId,
+        body: queuedMessage.body,
+      },
+      async (timeoutError: Error | null, result?: SocketAck) => {
+        retryingMessagesRef.current.delete(queuedMessage.clientMessageId);
+        if (timeoutError || !result) {
+          setError("Message is queued and will retry when the connection is restored.");
+          setSending(false);
+          return;
+        }
+        if (!result.success || !result.data?.message) {
+          const failure = result.message ?? "The message could not be sent.";
+          try {
+            await updateQueuedMessageStatus(queuedMessage.key, "failed");
+            setMessages((current) => current.map((message) => message.clientMessageId === queuedMessage.clientMessageId
+              ? { ...message, sendState: "failed" }
+              : message));
+          } catch (caughtError) {
+            setOutboxError(caughtError instanceof Error ? caughtError.message : "Could not save the message retry state.");
+          }
+          setError(failure);
+          setSending(false);
+          return;
+        }
+
+        const sentMessage = { ...result.data.message, sendState: "sent" as const };
+        setMessages((current) => upsertMessage(current, sentMessage));
+        setMessageText((current) => current.trim() === queuedMessage.body ? "" : current);
+        setSending(false);
+        setError("");
+        try {
+          await removeQueuedMessage(queuedMessage.key);
+          setOutboxError("");
+        } catch (caughtError) {
+          setOutboxError(caughtError instanceof Error
+            ? `Message sent, but local queue cleanup failed: ${caughtError.message}`
+            : "Message sent, but local queue cleanup failed.");
+        }
+      },
+    );
+  }, []);
 
   useEffect(() => {
     const conversationId = conversation?.conversationId;
     const bookingStatus = conversation?.bookingStatus;
-    const userId = user?.id;
     if (!conversationId || bookingStatus !== "confirmed" || !userId || (role !== "customer" && role !== "dealer")) return;
     const token = sessionStorage.getItem("drivenow_access_token");
     if (!token) return;
@@ -111,16 +247,29 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
     socketRef.current = socket;
 
     socket.on("connect", () => {
+      joinedConversationRef.current = false;
+      setConnected(false);
       socket.emit(
         "chat:join",
         { conversationId },
-        (result: SocketAck) => {
+        async (result: SocketAck) => {
           if (!result.success) {
             setError(result.message ?? "Unable to join this conversation.");
+            setConnected(false);
             return;
           }
+          joinedConversationRef.current = true;
           setConnected(true);
           setError("");
+          if (result.presence) setPresence(result.presence);
+          try {
+            const queuedMessages = await listQueuedMessages(userId, conversationId);
+            for (const queuedMessage of queuedMessages.filter((message) => message.status === "pending")) {
+              await retryQueuedMessage(queuedMessage);
+            }
+          } catch (caughtError) {
+            setOutboxError(caughtError instanceof Error ? caughtError.message : "Could not load queued messages.");
+          }
         },
       );
     });
@@ -128,15 +277,39 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
       setConnected(false);
       setError(caughtError.message || "Live chat connection failed.");
     });
-    socket.on("disconnect", () => setConnected(false));
+    socket.on("disconnect", () => {
+      joinedConversationRef.current = false;
+      setConnected(false);
+      typingActiveRef.current = false;
+      if (typingStartTimerRef.current !== null) window.clearTimeout(typingStartTimerRef.current);
+      if (typingStopTimerRef.current !== null) window.clearTimeout(typingStopTimerRef.current);
+      if (typingHeartbeatRef.current !== null) window.clearInterval(typingHeartbeatRef.current);
+      typingStartTimerRef.current = null;
+      typingStopTimerRef.current = null;
+      typingHeartbeatRef.current = null;
+      setIsOtherTyping(false);
+    });
     socket.on("chat:message", (incoming: ChatMessage) => {
-      setMessages((current) => current.some((message) => message.id === incoming.id)
-        ? current
-        : [...current, incoming]);
+      setMessages((current) => upsertMessage(current, { ...incoming, sendState: "sent" }));
       if (incoming.senderId !== userId) {
         socket.emit("chat:delivered", { conversationId, messageId: incoming.id });
         socket.emit("chat:read", { conversationId });
       }
+    });
+    socket.on("chat:typing", (input: { userId: string; isTyping: boolean }) => {
+      if (input.userId === userId) return;
+      setIsOtherTyping(input.isTyping);
+      if (typingIndicatorTimerRef.current !== null) window.clearTimeout(typingIndicatorTimerRef.current);
+      if (input.isTyping) {
+        typingIndicatorTimerRef.current = window.setTimeout(() => setIsOtherTyping(false), 4_000);
+      }
+    });
+    const otherPartyId = role === "customer" ? conversation?.dealerUserId : conversation?.customerId;
+    socket.on("presence:update", (update: PresenceUpdate) => {
+      if (update.userId === otherPartyId) setPresence(update);
+    });
+    socket.on("presence:privacy", (input: { userId: string }) => {
+      if (input.userId === otherPartyId) setPresence(null);
     });
     socket.on("chat:receipt", (receipt: ChatReceipt) => {
       setMessages((current) => current.map((message) => message.id === receipt.id
@@ -145,35 +318,123 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
     });
 
     return () => {
+      if (typingStartTimerRef.current !== null) window.clearTimeout(typingStartTimerRef.current);
+      if (typingStopTimerRef.current !== null) window.clearTimeout(typingStopTimerRef.current);
+      if (typingHeartbeatRef.current !== null) window.clearInterval(typingHeartbeatRef.current);
+      if (typingIndicatorTimerRef.current !== null) window.clearTimeout(typingIndicatorTimerRef.current);
+      joinedConversationRef.current = false;
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [conversation?.conversationId, conversation?.bookingStatus, role, user?.id]);
+  }, [conversation?.conversationId, conversation?.bookingStatus, conversation?.customerId, conversation?.dealerUserId, retryQueuedMessage, role, userId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  function stopTyping() {
+    if (typingStartTimerRef.current !== null) window.clearTimeout(typingStartTimerRef.current);
+    if (typingStopTimerRef.current !== null) window.clearTimeout(typingStopTimerRef.current);
+    if (typingHeartbeatRef.current !== null) window.clearInterval(typingHeartbeatRef.current);
+    typingStartTimerRef.current = null;
+    typingStopTimerRef.current = null;
+    typingHeartbeatRef.current = null;
+    if (typingActiveRef.current && conversation) {
+      socketRef.current?.emit("chat:typing", {
+        conversationId: conversation.conversationId,
+        isTyping: false,
+      });
+    }
+    typingActiveRef.current = false;
+  }
+
+  function handleMessageTextChange(value: string) {
+    setMessageText(value);
+    if (!value.trim() || !conversation || !connected) {
+      stopTyping();
+      return;
+    }
+
+    if (typingStopTimerRef.current !== null) window.clearTimeout(typingStopTimerRef.current);
+    if (!typingActiveRef.current && typingStartTimerRef.current === null) {
+      typingStartTimerRef.current = window.setTimeout(() => {
+        typingStartTimerRef.current = null;
+        const socket = socketRef.current;
+        if (!socket?.connected) return;
+        typingActiveRef.current = true;
+        socket.emit("chat:typing", { conversationId: conversation.conversationId, isTyping: true });
+        typingHeartbeatRef.current = window.setInterval(() => {
+          socket.emit("chat:typing", { conversationId: conversation.conversationId, isTyping: true });
+        }, 2_000);
+      }, 250);
+    }
+    typingStopTimerRef.current = window.setTimeout(stopTyping, 1_500);
+  }
+
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const body = messageText.trim();
-    const socket = socketRef.current;
-    if (!body || !socket || !connected || sending) return;
+    if (!body || !conversation || !userId || sending || isCancelled) return;
+
+    const queuedDuplicate = messages.find((message) => message.body === body
+      && message.sendState === "pending"
+      && message.clientMessageId);
+    if (queuedDuplicate) {
+      let queuedMessages: QueuedChatMessage[];
+      try {
+        queuedMessages = await listQueuedMessages(userId, conversation.conversationId);
+      } catch (caughtError) {
+        setOutboxError(caughtError instanceof Error ? caughtError.message : "Could not read the local message queue.");
+        return;
+      }
+      const queued = queuedMessages.find((message) => message.clientMessageId === queuedDuplicate.clientMessageId);
+      if (queued) {
+        setSending(true);
+        void retryQueuedMessage(queued);
+        return;
+      }
+    }
 
     setSending(true);
     setError("");
-    socket.emit(
-      "chat:send",
-      { conversationId: conversation?.conversationId, body },
-      (result: { success: boolean; message?: string }) => {
-        if (!result.success) {
-          setError(result.message ?? "Unable to send your message.");
-        } else {
-          setMessageText("");
-        }
+    stopTyping();
+
+    const clientMessageId = crypto.randomUUID();
+    const queuedMessage: QueuedChatMessage = {
+      key: `${userId}:${clientMessageId}`,
+      userId,
+      conversationId: conversation.conversationId,
+      clientMessageId,
+      body,
+      createdAt: new Date().toISOString(),
+      status: "pending",
+    };
+    try {
+      await saveQueuedMessage(queuedMessage);
+      setOutboxError("");
+      setMessages((current) => upsertMessage(current, {
+        id: clientMessageId,
+        clientMessageId,
+        senderId: userId,
+        senderName: user.fullName,
+        body,
+        createdAt: queuedMessage.createdAt,
+        deliveredAt: null,
+        readAt: null,
+        sendState: "pending",
+      }));
+      if (socketRef.current?.connected) {
+        void retryQueuedMessage(queuedMessage);
+      } else {
         setSending(false);
-      },
-    );
+        setError("Message saved on this device and will send when you reconnect.");
+      }
+    } catch (caughtError) {
+      setSending(false);
+      setOutboxError(caughtError instanceof Error
+        ? `Message was not sent because it could not be saved locally: ${caughtError.message}`
+        : "Message was not sent because it could not be saved locally.");
+    }
   }
 
   async function reportConversation(event: FormEvent<HTMLFormElement>) {
@@ -260,7 +521,16 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
           </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[#e9e5dc] pt-4 text-sm">
-          <p className="text-[#68756f]">Chatting with <span className="font-semibold text-[#123b35]">{otherParty}</span></p>
+          <div>
+            <p className="text-[#68756f]">Chatting with <span className="font-semibold text-[#123b35]">{otherParty}</span></p>
+            <p className="mt-1 text-xs text-[#87928c]">
+              {presence?.online
+                ? "Online"
+                : presence?.lastSeenAt
+                  ? `Last seen ${new Date(presence.lastSeenAt).toLocaleString()}`
+                  : "Presence hidden"}
+            </p>
+          </div>
           <span className={`inline-flex items-center gap-2 text-xs font-semibold ${connected ? "text-[#245c4c]" : "text-[#87928c]"}`}>
             <span className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-500" : "bg-[#c6c8c0]"}`} />
             {isCancelled ? "History only" : connected ? "Live" : "Connecting…"}
@@ -297,25 +567,75 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
                 <div className={`mt-2 flex items-center justify-end gap-2 text-[10px] ${mine ? "text-white/70" : "text-[#87928c]"}`}>
                   <time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString()}</time>
                   {mine && (
-                    <span aria-label={message.readAt ? "Seen" : message.deliveredAt ? "Delivered" : "Sent"}>
-                      {message.readAt ? "✓✓ Seen" : message.deliveredAt ? "✓✓ Delivered" : "✓ Sent"}
+                    <span aria-label={
+                      message.sendState === "failed"
+                        ? "Failed to send"
+                        : message.sendState === "pending"
+                          ? "Pending"
+                          : message.readAt
+                            ? "Seen"
+                            : message.deliveredAt
+                              ? "Delivered"
+                              : "Sent"
+                    }>
+                      {message.sendState === "failed"
+                        ? "Failed"
+                        : message.sendState === "pending"
+                          ? "Pending"
+                          : message.readAt
+                            ? "✓✓ Seen"
+                            : message.deliveredAt
+                              ? "✓✓ Delivered"
+                              : "✓ Sent"}
                     </span>
+                  )}
+                  {mine && message.sendState !== "sent" && !isCancelled && (
+                    <button
+                      type="button"
+                      className="font-bold underline"
+                      onClick={async () => {
+                        if (!userId || !conversation) return;
+                        try {
+                          const queued = await listQueuedMessages(userId, conversation.conversationId);
+                          const failed = queued.find((item) => item.clientMessageId === message.clientMessageId);
+                          if (!failed) {
+                            setOutboxError("This message is no longer in the local retry queue.");
+                            return;
+                          }
+                          setSending(true);
+                          void retryQueuedMessage(failed);
+                        } catch (caughtError) {
+                          setOutboxError(caughtError instanceof Error
+                            ? caughtError.message
+                            : "Could not load the local message retry queue.");
+                        }
+                      }}
+                    >
+                      Retry
+                    </button>
                   )}
                 </div>
               </article>
             </div>
           );
         })}
+        {isOtherTyping && (
+          <p role="status" className="self-start rounded-xl border border-[#e2ded5] bg-white px-3 py-2 text-xs text-[#68756f]">
+            {otherParty} is typing…
+          </p>
+        )}
         <div ref={bottomRef} />
       </div>
 
       {error && <p role="alert" className="border-t border-red-100 bg-red-50 px-5 py-3 text-sm text-red-800">{error}</p>}
+      {outboxError && <p role="alert" className="border-t border-amber-100 bg-amber-50 px-5 py-3 text-sm text-amber-900">{outboxError}</p>}
       <form onSubmit={sendMessage} className="flex items-end gap-3 border-t border-[#e9e5dc] p-4 sm:p-5">
         <label className="sr-only" htmlFor="chat-message">Write a message</label>
         <textarea
           id="chat-message"
           value={messageText}
-          onChange={(event) => setMessageText(event.target.value)}
+          onChange={(event) => handleMessageTextChange(event.target.value)}
+          onBlur={stopTyping}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -324,16 +644,16 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
           }}
           maxLength={4000}
           rows={2}
-          disabled={!connected || isCancelled}
-          placeholder={isCancelled ? "Messaging is closed for this cancelled booking" : "Write a message…"}
+          disabled={sending || isCancelled}
+          placeholder={isCancelled ? "Messaging is closed for this cancelled booking" : connected ? "Write a message…" : "Write a message — it will queue until you reconnect"}
           className="min-h-12 flex-1 resize-y rounded-xl border border-[#d6dcd5] bg-white px-4 py-3 text-sm text-[#18211f] outline-none transition focus:border-[#245c4c] focus:ring-2 focus:ring-[#245c4c]/15 disabled:bg-[#f4f1eb] disabled:text-[#87928c]"
         />
         <button
           type="submit"
-          disabled={!connected || !messageText.trim() || sending || isCancelled}
+          disabled={!messageText.trim() || sending || isCancelled}
           className="shrink-0 rounded-xl bg-[#123b35] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#245c4c] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {sending ? "Sending…" : "Send"}
+          {sending ? (connected ? "Sending…" : "Queued…") : "Send"}
         </button>
       </form>
 

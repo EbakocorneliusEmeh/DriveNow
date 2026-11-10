@@ -5,11 +5,13 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import SettingsLink from "@/components/SettingsLink";
 import { useAuth } from "@/hooks/useAuth";
+import { useUnreadChatCount } from "@/hooks/useUnreadChatCount";
 import CustomerBookings from "../CustomerBookings";
 
 export default function CustomerBookingsPage() {
   const router = useRouter();
   const { user, role, isLoading, error } = useAuth();
+  const { count: unreadMessageCount, error: unreadMessagesError } = useUnreadChatCount(role === "customer");
 
   useEffect(() => {
     if (!isLoading && role !== "customer") {
@@ -49,6 +51,7 @@ export default function CustomerBookingsPage() {
           </Link>
           <Link href="/dashboard/messages" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]">
             <span aria-hidden="true">□</span> Messages
+            {unreadMessageCount > 0 && <span className="ml-auto rounded-full bg-[#d9a441] px-2 py-0.5 text-[10px] font-bold text-[#18211f]">{unreadMessageCount > 99 ? "99+" : unreadMessageCount}</span>}
           </Link>
           <SettingsLink />
           <button type="button" onClick={handleLogout} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]">
@@ -79,6 +82,7 @@ export default function CustomerBookingsPage() {
         </header>
 
         <div className="mx-auto max-w-5xl px-5 py-8 sm:px-10 sm:py-12">
+          {unreadMessagesError && <p role="alert" className="mb-5 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{unreadMessagesError}</p>}
           <div className="mb-8 rounded-3xl bg-[#123b35] px-6 py-7 text-[#f4f1eb] sm:px-9 sm:py-9">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#d9a441]">Customer workspace</p>
             <h1 className="mt-3 text-3xl font-semibold tracking-[-0.05em] sm:text-4xl">Your rental activity</h1>

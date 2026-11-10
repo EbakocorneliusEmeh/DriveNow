@@ -12,6 +12,7 @@ import Search, { type VehicleSearchCriteria } from "./Search";
 
 const API_ORIGIN = "http://localhost:4000";
 const NOTIFICATIONS_API_URL = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api"}/notifications`;
+const CHAT_API_URL = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api"}/chat`;
 const SOCKET_URL = new URL(NOTIFICATIONS_API_URL).origin;
 
 type CurrentUser = {
@@ -75,6 +76,8 @@ export default function DashboardPage() {
   const [now, setNow] = useState<Date | null>(null);
   const [isPictureOpen, setIsPictureOpen] = useState(false);
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const [messagesError, setMessagesError] = useState("");
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [pushMessage, setPushMessage] = useState("");
   const [isRegisteringPush, setIsRegisteringPush] = useState(false);
@@ -154,7 +157,27 @@ export default function DashboardPage() {
     if (result.success) setNotifications(result.data?.notifications ?? []);
   }, []);
 
+  const loadUnreadMessages = useCallback(async () => {
+    const token = sessionStorage.getItem("drivenow_access_token");
+    if (!token) return;
+    const response = await fetch(CHAT_API_URL, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const result = await response.json() as {
+      success: boolean;
+      message?: string;
+      data?: { conversations: Array<{ unreadCount: number }> };
+    };
+    if (!response.ok || !result.success || !result.data) {
+      throw new Error(result.message ?? "Could not load unread messages.");
+    }
+    setUnreadMessageCount(result.data.conversations.reduce((total, item) => total + item.unreadCount, 0));
+    setMessagesError("");
+  }, []);
+
   const userId = user?.id;
+  const userRole = user?.role;
 
   useEffect(() => {
     if (isAuthLoading || !userId) return;
@@ -165,14 +188,22 @@ export default function DashboardPage() {
     const refreshNotifications = () => {
       void loadNotifications().catch(() => setPushMessage("Could not load notifications."));
     };
+    const refreshUnreadMessages = () => {
+      if (userRole !== "customer" && userRole !== "dealer") return;
+      void loadUnreadMessages().catch((caughtError) => {
+        setMessagesError(caughtError instanceof Error ? caughtError.message : "Could not load unread messages.");
+      });
+    };
     refreshNotifications();
+    refreshUnreadMessages();
 
     const socket = io(SOCKET_URL, { auth: { token }, transports: ["websocket", "polling"] });
     socket.on("chat:inbox-updated", refreshNotifications);
+    socket.on("chat:inbox-updated", refreshUnreadMessages);
     return () => {
       socket.disconnect();
     };
-  }, [isAuthLoading, loadNotifications, userId]);
+  }, [isAuthLoading, loadNotifications, loadUnreadMessages, userId, userRole]);
 
   async function enableNotifications() {
     const token = sessionStorage.getItem("drivenow_access_token");
@@ -251,6 +282,7 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen bg-[#f4f1eb] text-[#18211f]">
       {authError && <p role="alert" className="border-b border-red-200 bg-red-50 px-6 py-3 text-center text-sm text-red-800">{authError}</p>}
+      {messagesError && <p role="alert" className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-center text-sm text-amber-900">{messagesError}</p>}
       <aside className="fixed inset-y-0 left-0 z-10 hidden w-64 flex-col border-r border-[#e2ded5] bg-[#fffdf9] px-6 py-8 lg:flex">
         <Link href="/" className="text-xl font-bold tracking-[-0.06em] text-[#123b35]">Drive<span className="text-[#d9a441]">Now</span></Link>
         <div className="mt-16 space-y-2 text-sm font-semibold">
@@ -259,7 +291,7 @@ export default function DashboardPage() {
           <button onClick={handleLogout} className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>↩️</span> Logout</button>
           <a href="#vehicles" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>▦</span> Browse vehicles</a>
           <Link href="/dashboard/bookings" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>◷</span> My bookings</Link>
-          <Link href="/dashboard/messages" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>□</span> Messages</Link>
+          <Link href="/dashboard/messages" className="flex items-center gap-3 rounded-xl px-4 py-3 text-[#68756f] transition hover:bg-[#f4f1eb] hover:text-[#123b35]"><span>□</span> Messages{unreadMessageCount > 0 && <span className="ml-auto rounded-full bg-[#d9a441] px-2 py-0.5 text-[10px] font-bold text-[#18211f]">{unreadMessageCount > 99 ? "99+" : unreadMessageCount}</span>}</Link>
         </div>
         <div className="mt-auto rounded-2xl bg-[#e9eee7] p-4"><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#c28d27]">For businesses</p><p className="mt-3 text-sm font-semibold leading-5 text-[#123b35]">Create your business profile before listing your vehicles.</p><Link href="/become-a-dealer" className="mt-4 inline-block text-xs font-bold text-[#245c4c]">Become a dealer ↗</Link></div>
       </aside>

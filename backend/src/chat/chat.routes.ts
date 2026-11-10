@@ -1,12 +1,15 @@
 import { Router, type Request, type Router as ExpressRouter } from "express";
 import { ZodError } from "zod";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../auth/auth.middleware.js";
-import { chatIdSchema, chatReportSchema } from "./chat.schemas.js";
+import { chatIdSchema, chatReportSchema, presenceVisibilitySchema } from "./chat.schemas.js";
 import {
+  getPresenceSettings,
   getBookingConversationForParticipant,
   listUserConversations,
   reportConversation,
+  updatePresenceVisibility,
 } from "./chat.service.js";
+import { publishUserPresence } from "./chat.socket.js";
 
 const router: ExpressRouter = Router();
 
@@ -28,6 +31,41 @@ router.get("/", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Unable to load your conversations." });
+  }
+});
+
+router.get("/presence", async (req, res) => {
+  try {
+    const settings = await getPresenceSettings(authenticatedUser(req).id);
+    if (!settings) {
+      res.status(404).json({ success: false, message: "Presence settings not found." });
+      return;
+    }
+    res.status(200).json({ success: true, data: settings });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Unable to load presence settings." });
+  }
+});
+
+router.patch("/presence", async (req, res) => {
+  const parsed = presenceVisibilitySchema.safeParse(req.body?.visibility);
+  if (!parsed.success) {
+    res.status(400).json({ success: false, message: "Choose everyone, contacts, or nobody." });
+    return;
+  }
+
+  try {
+    const settings = await updatePresenceVisibility(authenticatedUser(req).id, parsed.data);
+    if (!settings) {
+      res.status(404).json({ success: false, message: "Presence settings not found." });
+      return;
+    }
+    await publishUserPresence(authenticatedUser(req).id);
+    res.status(200).json({ success: true, data: settings });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Unable to update presence settings." });
   }
 });
 

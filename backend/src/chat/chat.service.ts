@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gt, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   bookings,
@@ -69,8 +69,6 @@ export async function listUserConversations(userId: string, role: ChatRole) {
       imageUrls: vehicles.imageUrls,
       startDate: bookings.startDate,
       endDate: bookings.endDate,
-      customerLastReadAt: conversations.customerLastReadAt,
-      dealerLastReadAt: conversations.dealerLastReadAt,
       otherPartyName: role === "customer" ? dealerProfiles.businessName : users.fullName,
       updatedAt: conversations.updatedAt,
     })
@@ -83,7 +81,6 @@ export async function listUserConversations(userId: string, role: ChatRole) {
     .orderBy(desc(conversations.updatedAt));
 
   return Promise.all(records.map(async (record) => {
-    const readAt = role === "customer" ? record.customerLastReadAt : record.dealerLastReadAt;
     const [lastMessages, [unread]] = await Promise.all([
       db
       .select({
@@ -101,7 +98,7 @@ export async function listUserConversations(userId: string, role: ChatRole) {
         .where(and(
           eq(chatMessages.conversationId, record.conversationId),
           ne(chatMessages.senderId, userId),
-          readAt ? gt(chatMessages.createdAt, readAt) : undefined,
+          isNull(chatMessages.readAt),
         )),
     ]);
     return {
@@ -131,6 +128,7 @@ export async function getConversationForParticipant(
       senderName: users.fullName,
       body: chatMessages.body,
       createdAt: chatMessages.createdAt,
+      clientMessageId: chatMessages.clientMessageId,
       deliveredAt: chatMessages.deliveredAt,
       readAt: chatMessages.readAt,
     })
@@ -237,10 +235,87 @@ export async function markMessageDelivered(
   return receipt;
 }
 
+export async function getPresenceSettings(userId: string) {
+  const [settings] = await db
+    .select({
+      visibility: users.presenceVisibility,
+      role: users.role,
+      lastSeenAt: users.lastSeenAt,
+    })
+    .from(users)
+    .where(eq(users.id, userId));
+  return settings;
+}
+
+export async function updatePresenceVisibility(
+  userId: string,
+  visibility: "everyone" | "contacts" | "nobody",
+) {
+  const [settings] = await db
+    .update(users)
+    .set({ presenceVisibility: visibility, updatedAt: new Date() })
+    .where(eq(users.id, userId))
+    .returning({ visibility: users.presenceVisibility });
+  return settings;
+}
+
+export async function getConversationPresence(
+  conversationId: string,
+  userId: string,
+  role: "customer" | "dealer",
+) {
+  const record = await findConversationAccess(conversationId);
+  if (!record || !isParticipant(record, userId, role)) return undefined;
+
+  const otherUserId = role === "customer" ? record.dealerUserId : record.customerId;
+  const [presence] = await db
+    .select({
+      userId: users.id,
+      visibility: users.presenceVisibility,
+      lastSeenAt: users.lastSeenAt,
+    })
+    .from(users)
+    .where(eq(users.id, otherUserId));
+  return presence;
+}
+
+export async function listPresenceContacts(userId: string, role: "customer" | "dealer") {
+  const rows = role === "customer"
+    ? await db
+      .selectDistinct({ userId: dealerProfiles.userId })
+      .from(conversations)
+      .innerJoin(bookings, eq(conversations.bookingId, bookings.id))
+      .innerJoin(vehicles, eq(bookings.vehicleId, vehicles.id))
+      .innerJoin(dealerProfiles, eq(vehicles.dealerProfileId, dealerProfiles.id))
+      .where(and(
+        eq(bookings.customerId, userId),
+        inArray(bookings.status, ["confirmed", "cancelled"]),
+      ))
+    : await db
+      .selectDistinct({ userId: bookings.customerId })
+      .from(conversations)
+      .innerJoin(bookings, eq(conversations.bookingId, bookings.id))
+      .innerJoin(vehicles, eq(bookings.vehicleId, vehicles.id))
+      .innerJoin(dealerProfiles, eq(vehicles.dealerProfileId, dealerProfiles.id))
+      .where(and(
+        eq(dealerProfiles.userId, userId),
+        inArray(bookings.status, ["confirmed", "cancelled"]),
+      ));
+  return rows.map(({ userId: contactId }) => contactId);
+}
+
+export async function updateLastSeen(userId: string, lastSeenAt: Date) {
+  await db
+    .update(users)
+    .set({ lastSeenAt })
+    .where(eq(users.id, userId));
+}
+
 export async function saveChatMessage(
   conversationId: string,
   userId: string,
   role: "customer" | "dealer",
+  clientMessageId: string,
   body: string,
 ) {
   const result = await db.transaction(async (tx) => {
@@ -268,24 +343,87 @@ export async function saveChatMessage(
       .innerJoin(vehicles, eq(bookings.vehicleId, vehicles.id))
       .innerJoin(dealerProfiles, eq(vehicles.dealerProfileId, dealerProfiles.id))
       .where(eq(bookings.id, conversation.bookingId));
-    if (!booking || booking.status !== "confirmed") return undefined;
+    if (!booking) return undefined;
 
     const isCustomer = role === "customer" && booking.customerId === userId;
     const isDealer = role === "dealer" && booking.dealerUserId === userId;
     if (!isCustomer && !isDealer) return undefined;
 
+    const [existing] = await tx
+      .select({
+        id: chatMessages.id,
+        clientMessageId: chatMessages.clientMessageId,
+        senderId: chatMessages.senderId,
+        senderName: users.fullName,
+        body: chatMessages.body,
+        createdAt: chatMessages.createdAt,
+        deliveredAt: chatMessages.deliveredAt,
+        readAt: chatMessages.readAt,
+      })
+      .from(chatMessages)
+      .innerJoin(users, eq(chatMessages.senderId, users.id))
+      .where(and(
+        eq(chatMessages.senderId, userId),
+        eq(chatMessages.conversationId, conversationId),
+        eq(chatMessages.clientMessageId, clientMessageId),
+      ))
+      .limit(1);
+    if (existing) {
+      return {
+        message: existing,
+        recipientId: isCustomer ? booking.dealerUserId : booking.customerId,
+        vehicleName: `${booking.year} ${booking.make} ${booking.model}`,
+        bookingId: conversation.bookingId,
+        created: false,
+      };
+    }
+
+    if (booking.status !== "confirmed") return undefined;
+
     const now = new Date();
     const [message] = await tx
       .insert(chatMessages)
-      .values({ conversationId, senderId: userId, body })
+      .values({ conversationId, senderId: userId, clientMessageId, body })
+      .onConflictDoNothing()
       .returning({
         id: chatMessages.id,
+        clientMessageId: chatMessages.clientMessageId,
         senderId: chatMessages.senderId,
         body: chatMessages.body,
         createdAt: chatMessages.createdAt,
         deliveredAt: chatMessages.deliveredAt,
         readAt: chatMessages.readAt,
       });
+
+    if (!message) {
+      const [racedMessage] = await tx
+        .select({
+          id: chatMessages.id,
+          clientMessageId: chatMessages.clientMessageId,
+          senderId: chatMessages.senderId,
+          senderName: users.fullName,
+          body: chatMessages.body,
+          createdAt: chatMessages.createdAt,
+          deliveredAt: chatMessages.deliveredAt,
+          readAt: chatMessages.readAt,
+        })
+        .from(chatMessages)
+        .innerJoin(users, eq(chatMessages.senderId, users.id))
+        .where(and(
+          eq(chatMessages.senderId, userId),
+          eq(chatMessages.conversationId, conversationId),
+          eq(chatMessages.clientMessageId, clientMessageId),
+        ))
+        .limit(1);
+      if (!racedMessage) throw new Error("Message retry conflicted with an unexpected database constraint.");
+      return {
+        message: racedMessage,
+        recipientId: isCustomer ? booking.dealerUserId : booking.customerId,
+        vehicleName: `${booking.year} ${booking.make} ${booking.model}`,
+        bookingId: conversation.bookingId,
+        created: false,
+      };
+    }
 
     await tx
       .update(conversations)
@@ -304,25 +442,29 @@ export async function saveChatMessage(
       recipientId: isCustomer ? booking.dealerUserId : booking.customerId,
       vehicleName: `${booking.year} ${booking.make} ${booking.model}`,
       bookingId: conversation.bookingId,
+      created: true,
     };
   });
 
   if (!result) return undefined;
 
-  try {
-    await createNotification({
-      userId: result.recipientId,
-      title: "New booking message",
-      body: `${result.vehicleName}: ${body.slice(0, 120)}`,
-      link: `/dashboard/bookings/${result.bookingId}/chat`,
-    });
-  } catch (error) {
-    console.error("Chat message was saved, but notification delivery failed:", error);
+  if (result.created) {
+    try {
+      await createNotification({
+        userId: result.recipientId,
+        title: "New booking message",
+        body: `${result.vehicleName}: ${body.slice(0, 120)}`,
+        link: `/dashboard/bookings/${result.bookingId}/chat`,
+      });
+    } catch (error) {
+      console.error("Chat message was saved, but notification delivery failed:", error);
+    }
   }
   return {
     message: result.message,
     recipientId: result.recipientId,
     bookingId: result.bookingId,
+    created: result.created,
   };
 }
 
