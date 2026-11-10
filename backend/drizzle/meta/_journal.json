@@ -92,6 +92,13 @@
       "when": 1793710321476,
       "tag": "0012_vehicle_availability_blocks",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794292773922,
+      "tag": "0013_flippant_tusk",
+      "breakpoints": true
     }
   ]
 }

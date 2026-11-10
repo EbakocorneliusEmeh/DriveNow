@@ -191,6 +191,8 @@ export const chatMessages = pgTable("chat_messages", {
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   body: text("body").notNull(),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  readAt: timestamp("read_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),

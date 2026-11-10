@@ -3,7 +3,12 @@ import jwt from "jsonwebtoken";
 import { Server, type Socket } from "socket.io";
 import { z } from "zod";
 import { chatMessageSchema } from "./chat.schemas.js";
-import { canJoinConversation, markConversationRead, saveChatMessage } from "./chat.service.js";
+import {
+  canJoinConversation,
+  markConversationRead,
+  markMessageDelivered,
+  saveChatMessage,
+} from "./chat.service.js";
 
 type SocketUser = {
   id: string;
@@ -15,6 +20,7 @@ type ChatSocket = Socket & {
 };
 
 const joinSchema = z.object({ conversationId: z.string().uuid() });
+const receiptSchema = joinSchema.extend({ messageId: z.string().uuid() });
 const frontendOrigin = process.env.FRONTEND_URL ?? "http://localhost:3000";
 
 export function attachChatSocket(server: HttpServer) {
@@ -77,7 +83,10 @@ export function attachChatSocket(server: HttpServer) {
           return;
         }
         await socket.join(`conversation:${parsed.data.conversationId}`);
-        await markConversationRead(parsed.data.conversationId, user.id, user.role);
+        const receipts = await markConversationRead(parsed.data.conversationId, user.id, user.role);
+        for (const receipt of receipts ?? []) {
+          io.to(`conversation:${parsed.data.conversationId}`).emit("chat:receipt", receipt);
+        }
         respond({ success: true });
       } catch (error) {
         console.error("Unable to join chat conversation:", error);
@@ -89,12 +98,34 @@ export function attachChatSocket(server: HttpServer) {
       const parsed = joinSchema.safeParse(input);
       if (!parsed.success || !socket.rooms.has(`conversation:${parsed.data.conversationId}`)) return;
       try {
-        await markConversationRead(parsed.data.conversationId, user.id, user.role);
+        const receipts = await markConversationRead(parsed.data.conversationId, user.id, user.role);
+        for (const receipt of receipts ?? []) {
+          io.to(`conversation:${parsed.data.conversationId}`).emit("chat:receipt", receipt);
+        }
         io.to(`user:${user.id}`).emit("chat:inbox-updated", {
           conversationId: parsed.data.conversationId,
         });
       } catch (error) {
         console.error("Unable to mark chat messages as read:", error);
+      }
+    });
+
+    socket.on("chat:delivered", async (input: unknown) => {
+      const parsed = receiptSchema.safeParse(input);
+      if (!parsed.success) return;
+
+      try {
+        const receipt = await markMessageDelivered(
+          parsed.data.conversationId,
+          parsed.data.messageId,
+          user.id,
+          user.role,
+        );
+        if (receipt) {
+          io.to(`conversation:${parsed.data.conversationId}`).emit("chat:receipt", receipt);
+        }
+      } catch (error) {
+        console.error("Unable to mark chat message as delivered:", error);
       }
     });
 
@@ -125,6 +156,10 @@ export function attachChatSocket(server: HttpServer) {
           return;
         }
         io.to(room).emit("chat:message", message.message);
+        io.to(`user:${message.recipientId}`).emit("chat:incoming", {
+          conversationId: parsed.data.conversationId,
+          messageId: message.message.id,
+        });
         io.to(`user:${message.recipientId}`).emit("chat:inbox-updated", {
           bookingId: message.bookingId,
         });

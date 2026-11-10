@@ -15,7 +15,11 @@ type ChatMessage = {
   senderName: string;
   body: string;
   createdAt: string;
+  deliveredAt: string | null;
+  readAt: string | null;
 };
+
+type ChatReceipt = Pick<ChatMessage, "id" | "deliveredAt" | "readAt">;
 
 type Conversation = {
   conversationId: string;
@@ -130,8 +134,14 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
         ? current
         : [...current, incoming]);
       if (incoming.senderId !== userId) {
+        socket.emit("chat:delivered", { conversationId, messageId: incoming.id });
         socket.emit("chat:read", { conversationId });
       }
+    });
+    socket.on("chat:receipt", (receipt: ChatReceipt) => {
+      setMessages((current) => current.map((message) => message.id === receipt.id
+        ? { ...message, deliveredAt: receipt.deliveredAt, readAt: receipt.readAt }
+        : message));
     });
 
     return () => {
@@ -284,9 +294,14 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
                   {message.senderName}
                 </p>
                 <p className="whitespace-pre-wrap break-words text-sm leading-6">{message.body}</p>
-                <time dateTime={message.createdAt} className={`mt-2 block text-right text-[10px] ${mine ? "text-white/70" : "text-[#87928c]"}`}>
-                  {new Date(message.createdAt).toLocaleString()}
-                </time>
+                <div className={`mt-2 flex items-center justify-end gap-2 text-[10px] ${mine ? "text-white/70" : "text-[#87928c]"}`}>
+                  <time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString()}</time>
+                  {mine && (
+                    <span aria-label={message.readAt ? "Seen" : message.deliveredAt ? "Delivered" : "Sent"}>
+                      {message.readAt ? "✓✓ Seen" : message.deliveredAt ? "✓✓ Delivered" : "✓ Sent"}
+                    </span>
+                  )}
+                </div>
               </article>
             </div>
           );

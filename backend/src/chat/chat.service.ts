@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gt, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, count, desc, eq, gt, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   bookings,
@@ -124,14 +124,6 @@ export async function getConversationForParticipant(
     return undefined;
   }
 
-  const now = new Date();
-  await db
-    .update(conversations)
-    .set(role === "customer"
-      ? { customerLastReadAt: now, updatedAt: now }
-      : { dealerLastReadAt: now, updatedAt: now })
-    .where(eq(conversations.id, conversationId));
-
   const messages = await db
     .select({
       id: chatMessages.id,
@@ -139,6 +131,8 @@ export async function getConversationForParticipant(
       senderName: users.fullName,
       body: chatMessages.body,
       createdAt: chatMessages.createdAt,
+      deliveredAt: chatMessages.deliveredAt,
+      readAt: chatMessages.readAt,
     })
     .from(chatMessages)
     .innerJoin(users, eq(chatMessages.senderId, users.id))
@@ -182,17 +176,65 @@ export async function markConversationRead(
   if (!record
     || !isParticipant(record, userId, role)
     || (record.bookingStatus !== "confirmed" && record.bookingStatus !== "cancelled")) {
-    return false;
+    return undefined;
   }
 
   const now = new Date();
-  await db
-    .update(conversations)
-    .set(role === "customer"
-      ? { customerLastReadAt: now, updatedAt: now }
-      : { dealerLastReadAt: now, updatedAt: now })
-    .where(eq(conversations.id, conversationId));
-  return true;
+  return db.transaction(async (tx) => {
+    await tx
+      .update(conversations)
+      .set(role === "customer"
+        ? { customerLastReadAt: now, updatedAt: now }
+        : { dealerLastReadAt: now, updatedAt: now })
+      .where(eq(conversations.id, conversationId));
+
+    return tx
+      .update(chatMessages)
+      .set({
+        deliveredAt: sql`coalesce(${chatMessages.deliveredAt}, ${now})`,
+        readAt: now,
+      })
+      .where(and(
+        eq(chatMessages.conversationId, conversationId),
+        ne(chatMessages.senderId, userId),
+        isNull(chatMessages.readAt),
+      ))
+      .returning({
+        id: chatMessages.id,
+        deliveredAt: chatMessages.deliveredAt,
+        readAt: chatMessages.readAt,
+      });
+  });
+}
+
+export async function markMessageDelivered(
+  conversationId: string,
+  messageId: string,
+  userId: string,
+  role: "customer" | "dealer",
+) {
+  const record = await findConversationAccess(conversationId);
+  if (!record
+    || !isParticipant(record, userId, role)
+    || record.bookingStatus !== "confirmed") {
+    return undefined;
+  }
+
+  const [receipt] = await db
+    .update(chatMessages)
+    .set({ deliveredAt: new Date() })
+    .where(and(
+      eq(chatMessages.id, messageId),
+      eq(chatMessages.conversationId, conversationId),
+      ne(chatMessages.senderId, userId),
+      isNull(chatMessages.deliveredAt),
+    ))
+    .returning({
+      id: chatMessages.id,
+      deliveredAt: chatMessages.deliveredAt,
+      readAt: chatMessages.readAt,
+    });
+  return receipt;
 }
 
 export async function saveChatMessage(
@@ -241,6 +283,8 @@ export async function saveChatMessage(
         senderId: chatMessages.senderId,
         body: chatMessages.body,
         createdAt: chatMessages.createdAt,
+        deliveredAt: chatMessages.deliveredAt,
+        readAt: chatMessages.readAt,
       });
 
     await tx
