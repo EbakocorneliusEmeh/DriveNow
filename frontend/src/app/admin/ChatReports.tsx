@@ -144,15 +144,25 @@ export default function ChatReports() {
             <button type="button" onClick={() => setSelected(null)} className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700">Close</button>
           </div>
           <div className="mt-4 max-h-96 space-y-3 overflow-y-auto rounded-lg bg-white p-4">
-            {selected.messages.length ? selected.messages.map((message) => (
-              <article key={message.id} className="border-b border-gray-100 pb-3 last:border-0">
-                <div className="flex flex-wrap justify-between gap-2">
-                  <p className="text-sm font-bold text-gray-900">{message.senderName}</p>
-                  <time className="text-xs text-gray-500">{new Date(message.createdAt).toLocaleString()}</time>
-                </div>
-                <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-gray-700">{message.body}</p>
-              </article>
-            )) : <p className="text-sm text-gray-500">No messages were sent in this conversation.</p>}
+            {selected.messages.length ? selected.messages.map((message) => {
+              const voiceMessage = message.body.startsWith("data:audio/") || message.body.startsWith("voice:");
+              return (
+                <article key={message.id} className="border-b border-gray-100 pb-3 last:border-0">
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <p className="text-sm font-bold text-gray-900">{message.senderName}</p>
+                    <time className="text-xs text-gray-500">{new Date(message.createdAt).toLocaleString()}</time>
+                  </div>
+                  {voiceMessage ? (
+                    <div className="mt-2 space-y-2">
+                      <span className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-900">🎙 Voice note</span>
+                      <audio controls src={message.body} className="w-full max-w-md" />
+                    </div>
+                  ) : (
+                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-gray-700">{message.body}</p>
+                  )}
+                </article>
+              );
+            }) : <p className="text-sm text-gray-500">No messages were sent in this conversation.</p>}
           </div>
         </div>
       )}

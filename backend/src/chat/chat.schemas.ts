@@ -5,7 +5,7 @@ export const chatIdSchema = z.string().uuid();
 export const chatMessageSchema = z.object({
   conversationId: z.string().uuid(),
   clientMessageId: z.string().uuid(),
-  body: z.string().trim().min(1).max(4_000),
+  body: z.string().trim().min(1).max(2_000_000),
 });
 
 export const chatTypingSchema = z.object({

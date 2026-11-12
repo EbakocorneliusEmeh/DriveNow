@@ -241,7 +241,9 @@ export default function MessagesInbox() {
                   {conversation.otherPartyName} · {conversation.startDate} – {conversation.endDate}
                 </p>
                 <p className="mt-2 truncate text-sm text-[#68756f]">
-                  {conversation.lastMessage?.body ?? "No messages yet. Start the conversation."}
+                  {conversation.lastMessage && conversation.lastMessage.body.startsWith("data:audio/")
+                    ? "🎙 Voice note"
+                    : conversation.lastMessage?.body ?? "No messages yet. Start the conversation."}
                 </p>
               </div>
               <p className="ml-auto text-xs text-[#87928c]">

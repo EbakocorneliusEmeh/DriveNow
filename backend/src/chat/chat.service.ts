@@ -450,10 +450,13 @@ export async function saveChatMessage(
 
   if (result.created) {
     try {
+      const notificationBody = body.startsWith("data:audio/")
+        ? "Voice note"
+        : body.slice(0, 120);
       await createNotification({
         userId: result.recipientId,
         title: "New booking message",
-        body: `${result.vehicleName}: ${body.slice(0, 120)}`,
+        body: `${result.vehicleName}: ${notificationBody}`,
         link: `/dashboard/bookings/${result.bookingId}/chat`,
       });
     } catch (error) {

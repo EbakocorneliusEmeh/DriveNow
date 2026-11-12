@@ -80,6 +80,22 @@ function upsertMessage(messages: ChatMessage[], incoming: ChatMessage) {
     : message);
 }
 
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Unable to encode the voice note."));
+    };
+    reader.onerror = () => reject(new Error("Unable to read the voice note."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function isVoiceMessage(body: string) {
+  return body.startsWith("data:audio/") || body.startsWith("voice:");
+}
+
 export default function BookingChat({ bookingId }: { bookingId: string }) {
   const { user, role, isLoading: isAuthLoading } = useAuth();
   const userId = user?.id;
@@ -97,9 +113,15 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
   const [outboxError, setOutboxError] = useState("");
   const [isOtherTyping, setIsOtherTyping] = useState(false);
   const [presence, setPresence] = useState<PresenceUpdate | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const socketRef = useRef<Socket | null>(null);
   const joinedConversationRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const recordingTimerRef = useRef<number | null>(null);
+  const recordingDurationRef = useRef(0);
   const retryingMessagesRef = useRef(new Set<string>());
   const typingActiveRef = useRef(false);
   const typingStartTimerRef = useRef<number | null>(null);
@@ -291,6 +313,11 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
     });
     socket.on("chat:message", (incoming: ChatMessage) => {
       setMessages((current) => upsertMessage(current, { ...incoming, sendState: "sent" }));
+      if (incoming.senderId !== userId && isVoiceMessage(incoming.body)) {
+        const audio = new Audio(incoming.body);
+        audio.preload = "auto";
+        void audio.play().catch(() => undefined);
+      }
       if (incoming.senderId !== userId) {
         socket.emit("chat:delivered", { conversationId, messageId: incoming.id });
         socket.emit("chat:read", { conversationId });
@@ -437,6 +464,107 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
     }
   }
 
+  async function sendVoiceMessage(blob: Blob, durationSeconds: number) {
+    if (!conversation || !userId || isCancelled) return;
+
+    const body = await blobToDataUrl(blob);
+    const clientMessageId = crypto.randomUUID();
+    const queuedMessage: QueuedChatMessage = {
+      key: `${userId}:${clientMessageId}`,
+      userId,
+      conversationId: conversation.conversationId,
+      clientMessageId,
+      body,
+      createdAt: new Date().toISOString(),
+      status: "pending",
+    };
+
+    setSending(true);
+    setError("");
+    stopTyping();
+
+    try {
+      await saveQueuedMessage(queuedMessage);
+      setMessages((current) => upsertMessage(current, {
+        id: clientMessageId,
+        clientMessageId,
+        senderId: userId,
+        senderName: user.fullName,
+        body,
+        createdAt: queuedMessage.createdAt,
+        deliveredAt: null,
+        readAt: null,
+        sendState: "pending",
+      }));
+      if (socketRef.current?.connected) {
+        void retryQueuedMessage(queuedMessage);
+      } else {
+        setSending(false);
+        setError("Voice note saved on this device and will send when you reconnect.");
+      }
+      setOutboxError("");
+    } catch (caughtError) {
+      setSending(false);
+      setOutboxError(caughtError instanceof Error
+        ? `Voice note could not be saved locally: ${caughtError.message}`
+        : "Voice note could not be saved locally.");
+    }
+
+    if (durationSeconds > 0) {
+      setRecordingSeconds(durationSeconds);
+    }
+  }
+
+  async function startRecordingVoice() {
+    if (!conversation || !navigator.mediaDevices?.getUserMedia || isCancelled) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const audioChunks: Blob[] = [];
+      audioStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      recordingDurationRef.current = 0;
+      setRecordingSeconds(0);
+      setIsRecording(true);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunks.push(event.data);
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunks, { type: recorder.mimeType || "audio/webm" });
+        audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+        audioStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        setIsRecording(false);
+        setRecordingSeconds(0);
+        if (audioBlob.size > 0) {
+          await sendVoiceMessage(audioBlob, recordingDurationRef.current);
+        }
+      };
+
+      recorder.start();
+      if (recordingTimerRef.current !== null) window.clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = window.setInterval(() => {
+        recordingDurationRef.current += 1;
+        setRecordingSeconds(recordingDurationRef.current);
+      }, 1000);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Microphone access is unavailable.");
+    }
+  }
+
+  function stopRecordingVoice() {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) return;
+    if (recordingTimerRef.current !== null) {
+      window.clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    recorder.stop();
+  }
+
   async function reportConversation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const token = sessionStorage.getItem("drivenow_access_token");
@@ -557,13 +685,23 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
           </div>
         ) : messages.map((message) => {
           const mine = message.senderId === user.id;
+          const voiceMessage = isVoiceMessage(message.body);
           return (
             <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
               <article className={`max-w-[85%] rounded-2xl px-4 py-3 sm:max-w-[70%] ${mine ? "rounded-br-md bg-[#123b35] text-white" : "rounded-bl-md border border-[#e2ded5] bg-white text-[#18211f]"}`}>
                 <p className={`mb-1 text-xs font-bold ${mine ? "text-white/75" : "text-[#245c4c]"}`}>
                   {message.senderName}
                 </p>
-                <p className="whitespace-pre-wrap break-words text-sm leading-6">{message.body}</p>
+                {voiceMessage ? (
+                  <div className="space-y-2">
+                    <span className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${mine ? "bg-white/12 text-white/80" : "bg-[#edf3f0] text-[#245c4c]"}`}>
+                      🎙 Voice note
+                    </span>
+                    <audio controls src={message.body} className="w-full max-w-xs" />
+                  </div>
+                ) : (
+                  <p className="whitespace-pre-wrap break-words text-sm leading-6">{message.body}</p>
+                )}
                 <div className={`mt-2 flex items-center justify-end gap-2 text-[10px] ${mine ? "text-white/70" : "text-[#87928c]"}`}>
                   <time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString()}</time>
                   {mine && (
@@ -648,6 +786,15 @@ export default function BookingChat({ bookingId }: { bookingId: string }) {
           placeholder={isCancelled ? "Messaging is closed for this cancelled booking" : connected ? "Write a message…" : "Write a message — it will queue until you reconnect"}
           className="min-h-12 flex-1 resize-y rounded-xl border border-[#d6dcd5] bg-white px-4 py-3 text-sm text-[#18211f] outline-none transition focus:border-[#245c4c] focus:ring-2 focus:ring-[#245c4c]/15 disabled:bg-[#f4f1eb] disabled:text-[#87928c]"
         />
+        <button
+          type="button"
+          onClick={isRecording ? stopRecordingVoice : startRecordingVoice}
+          disabled={sending || isCancelled}
+          className={`shrink-0 rounded-xl px-4 py-3 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${isRecording ? "bg-[#943d22] hover:bg-[#7f3627]" : "bg-[#245c4c] hover:bg-[#1a413a]"}`}
+          aria-label={isRecording ? "Stop recording voice note" : "Record a voice note"}
+        >
+          {isRecording ? `Stop ${recordingSeconds}s` : "Voice"}
+        </button>
         <button
           type="submit"
           disabled={!messageText.trim() || sending || isCancelled}
