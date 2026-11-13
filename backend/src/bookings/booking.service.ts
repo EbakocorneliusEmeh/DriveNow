@@ -52,6 +52,7 @@ export async function createBookingRequest(input: {
         .where(and(
           eq(vehicles.id, input.vehicleId),
           eq(vehicles.status, "published"),
+          eq(vehicles.approvalStatus, "approved"),
           eq(dealerProfiles.approvalStatus, "approved"),
         ))
       : [];

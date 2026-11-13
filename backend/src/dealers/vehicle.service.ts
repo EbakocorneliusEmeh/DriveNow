@@ -7,6 +7,7 @@ import type { AvailabilityBlockInput, VehicleInput, VehicleSearch } from "./vehi
 export async function searchVehicles(input: VehicleSearch) {
   const conditions = [
     eq(vehicles.status, "published"),
+    eq(vehicles.approvalStatus, "approved"),
     eq(dealerProfiles.approvalStatus, "approved"),
   ];
 
@@ -203,6 +204,8 @@ const vehicleFields = {
   description: vehicles.description,
   imageUrls: vehicles.imageUrls,
   status: vehicles.status,
+  approvalStatus: vehicles.approvalStatus,
+  approvalReason: vehicles.approvalReason,
   createdAt: vehicles.createdAt,
   updatedAt: vehicles.updatedAt,
 };
@@ -234,6 +237,7 @@ export async function listPublishedVehicles() {
     .where(
       and(
         eq(vehicles.status, "published"),
+        eq(vehicles.approvalStatus, "approved"),
         eq(dealerProfiles.approvalStatus, "approved"),
       ),
     )
@@ -256,6 +260,7 @@ export async function getPublishedVehicle(vehicleId: string) {
       and(
         eq(vehicles.id, vehicleId),
         eq(vehicles.status, "published"),
+        eq(vehicles.approvalStatus, "approved"),
         eq(dealerProfiles.approvalStatus, "approved"),
       ),
     );
@@ -281,6 +286,7 @@ export async function createVehicle(userId: string, input: VehicleInput) {
       dealerProfileId: profile.id,
       ...input,
       status: "draft",
+      approvalStatus: "not_submitted",
       updatedAt: new Date(),
     })
     .returning(vehicleFields);
@@ -289,20 +295,35 @@ export async function createVehicle(userId: string, input: VehicleInput) {
 }
 
 export async function updateVehicle(userId: string, vehicleId: string, input: VehicleInput) {
-  const [vehicle] = await db
-    .update(vehicles)
-    .set({ ...input, updatedAt: new Date() })
-    .from(dealerProfiles)
-    .where(
-      and(
-        eq(vehicles.id, vehicleId),
-        eq(vehicles.dealerProfileId, dealerProfiles.id),
-        eq(dealerProfiles.userId, userId),
-      ),
-    )
-    .returning(vehicleFields);
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({
+        id: vehicles.id,
+        status: vehicles.status,
+        approvalStatus: vehicles.approvalStatus,
+      })
+      .from(vehicles)
+      .innerJoin(dealerProfiles, eq(vehicles.dealerProfileId, dealerProfiles.id))
+      .where(and(eq(vehicles.id, vehicleId), eq(dealerProfiles.userId, userId)))
+      .for("update");
 
-  return vehicle;
+    if (!existing) return undefined;
+
+    const needsReview = existing.approvalStatus === "approved";
+    const [vehicle] = await tx
+      .update(vehicles)
+      .set({
+        ...input,
+        ...(needsReview
+          ? { status: "draft" as const, approvalStatus: "pending" as const, approvalReason: null }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(vehicles.id, vehicleId))
+      .returning(vehicleFields);
+
+    return vehicle;
+  });
 }
 
 export async function setVehicleStatus(
@@ -310,9 +331,12 @@ export async function setVehicleStatus(
   vehicleId: string,
   status: "draft" | "published",
 ) {
-  if (status === "published") {
-    const [profile] = await db
-      .select({ id: dealerProfiles.id, approvalStatus: dealerProfiles.approvalStatus })
+  return db.transaction(async (tx) => {
+    const [profile] = await tx
+      .select({
+        id: dealerProfiles.id,
+        approvalStatus: dealerProfiles.approvalStatus,
+      })
       .from(dealerProfiles)
       .where(eq(dealerProfiles.userId, userId));
 
@@ -321,34 +345,55 @@ export async function setVehicleStatus(
       error.name = "DealerProfileNotFoundError";
       throw error;
     }
+
+    if (status === "draft") {
+      const [vehicle] = await tx
+        .update(vehicles)
+        .set({ status, updatedAt: new Date() })
+        .where(and(
+          eq(vehicles.dealerProfileId, profile.id),
+          eq(vehicles.id, vehicleId),
+        ))
+        .returning(vehicleFields);
+      return vehicle;
+    }
+
     if (profile.approvalStatus !== "approved") {
-      const error = new Error("Your dealer account must be approved before publishing vehicles.");
+      const error = new Error("Your dealer account must be approved before submitting vehicles for review.");
       error.name = "DealerNotApprovedError";
       throw error;
     }
 
-    const [vehicle] = await db
-      .update(vehicles)
-      .set({ status, updatedAt: new Date() })
+    const [existing] = await tx
+      .select({
+        id: vehicles.id,
+        approvalStatus: vehicles.approvalStatus,
+        imageUrls: vehicles.imageUrls,
+      })
+      .from(vehicles)
       .where(and(eq(vehicles.id, vehicleId), eq(vehicles.dealerProfileId, profile.id)))
+      .for("update");
+    if (!existing) return undefined;
+    if (existing.approvalStatus !== "approved" && existing.imageUrls.length === 0) {
+      const error = new Error("Add at least one vehicle photo before submitting it for review.");
+      error.name = "VehiclePhotoRequiredError";
+      throw error;
+    }
+
+    const [vehicle] = await tx
+      .update(vehicles)
+      .set(existing.approvalStatus === "approved"
+        ? { status: "published", updatedAt: new Date() }
+        : {
+          status: "draft",
+          approvalStatus: "pending",
+          approvalReason: null,
+          updatedAt: new Date(),
+        })
+      .where(eq(vehicles.id, vehicleId))
       .returning(vehicleFields);
     return vehicle;
-  }
-
-  const [vehicle] = await db
-    .update(vehicles)
-    .set({ status, updatedAt: new Date() })
-    .from(dealerProfiles)
-    .where(
-      and(
-        eq(vehicles.id, vehicleId),
-        eq(vehicles.dealerProfileId, dealerProfiles.id),
-        eq(dealerProfiles.userId, userId),
-      ),
-    )
-    .returning(vehicleFields);
-
-  return vehicle;
+  });
 }
 
 export async function deleteVehicle(userId: string, vehicleId: string) {
@@ -387,7 +432,11 @@ export async function addVehicleImage(
   }
 
   const [vehicle] = await db
-    .select({ id: vehicles.id, imageUrls: vehicles.imageUrls })
+    .select({
+      id: vehicles.id,
+      imageUrls: vehicles.imageUrls,
+      approvalStatus: vehicles.approvalStatus,
+    })
     .from(vehicles)
     .innerJoin(dealerProfiles, eq(vehicles.dealerProfileId, dealerProfiles.id))
     .where(and(eq(vehicles.id, vehicleId), eq(dealerProfiles.userId, userId)));
@@ -451,6 +500,9 @@ export async function addVehicleImage(
     .update(vehicles)
     .set({
       imageUrls: [...vehicle.imageUrls, uploadResult.secure_url],
+      ...(vehicle.approvalStatus === "approved"
+        ? { status: "draft" as const, approvalStatus: "pending" as const, approvalReason: null }
+        : {}),
       updatedAt: new Date(),
     })
     .where(eq(vehicles.id, vehicle.id))

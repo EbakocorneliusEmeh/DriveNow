@@ -15,6 +15,7 @@ const profileFields = {
   profilePictureUrl: dealerProfiles.profilePictureUrl,
   documentUrls: dealerProfiles.documentUrls,
   approvalStatus: dealerProfiles.approvalStatus,
+  approvalReason: dealerProfiles.approvalReason,
   createdAt: dealerProfiles.createdAt,
   updatedAt: dealerProfiles.updatedAt,
 };
@@ -47,7 +48,7 @@ export async function submitDealerApplication(
   if (existingProfile) {
     const [profile] = await db
       .update(dealerProfiles)
-      .set({ ...values, approvalStatus: "pending" })
+      .set({ ...values, approvalStatus: "pending", approvalReason: null })
       .where(eq(dealerProfiles.userId, userId))
       .returning(profileFields);
     return profile;

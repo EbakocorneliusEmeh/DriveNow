@@ -280,6 +280,10 @@ router.patch("/:vehicleId/status", async (req, res) => {
       res.status(409).json({ success: false, message: error.message });
       return;
     }
+    if (error instanceof Error && error.name === "VehiclePhotoRequiredError") {
+      res.status(400).json({ success: false, message: error.message });
+      return;
+    }
     console.error(error);
     res.status(500).json({ success: false, message: "Unable to change vehicle listing status." });
   }

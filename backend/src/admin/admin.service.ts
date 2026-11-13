@@ -1,6 +1,6 @@
-import { count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { dealerProfiles, users } from "../db/schema.js";
+import { dealerProfiles, users, vehicles } from "../db/schema.js";
 
 const applicationFields = {
   id: dealerProfiles.id,
@@ -10,11 +10,30 @@ const applicationFields = {
   businessAddress: dealerProfiles.businessAddress,
   description: dealerProfiles.description,
   logoUrl: dealerProfiles.logoUrl,
+  profilePictureUrl: dealerProfiles.profilePictureUrl,
   documentUrls: dealerProfiles.documentUrls,
   approvalStatus: dealerProfiles.approvalStatus,
+  approvalReason: dealerProfiles.approvalReason,
   updatedAt: dealerProfiles.updatedAt,
   applicantName: users.fullName,
   applicantEmail: users.email,
+};
+
+const vehicleReviewFields = {
+  id: vehicles.id,
+  make: vehicles.make,
+  model: vehicles.model,
+  year: vehicles.year,
+  dailyRate: vehicles.dailyRate,
+  location: vehicles.location,
+  description: vehicles.description,
+  imageUrls: vehicles.imageUrls,
+  status: vehicles.status,
+  approvalStatus: vehicles.approvalStatus,
+  approvalReason: vehicles.approvalReason,
+  updatedAt: vehicles.updatedAt,
+  dealerName: dealerProfiles.businessName,
+  dealerEmail: users.email,
 };
 
 const userFields = {
@@ -53,6 +72,16 @@ export async function listDealerApplications() {
     .orderBy(desc(dealerProfiles.updatedAt));
 }
 
+export async function listVehicleReviews() {
+  return db
+    .select(vehicleReviewFields)
+    .from(vehicles)
+    .innerJoin(dealerProfiles, eq(vehicles.dealerProfileId, dealerProfiles.id))
+    .innerJoin(users, eq(dealerProfiles.userId, users.id))
+    .where(eq(vehicles.approvalStatus, "pending"))
+    .orderBy(desc(vehicles.updatedAt));
+}
+
 export async function listUsers() {
   return db
     .select(userFields)
@@ -63,13 +92,26 @@ export async function listUsers() {
 export async function reviewDealerApplication(
   applicationId: string,
   decision: "approved" | "rejected",
+  reason: string | undefined,
 ) {
   return db.transaction(async (transaction) => {
     const [application] = await transaction
       .update(dealerProfiles)
-      .set({ approvalStatus: decision, updatedAt: new Date() })
-      .where(eq(dealerProfiles.id, applicationId))
-      .returning({ userId: dealerProfiles.userId, approvalStatus: dealerProfiles.approvalStatus });
+      .set({
+        approvalStatus: decision,
+        approvalReason: decision === "rejected" ? reason ?? null : null,
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(dealerProfiles.id, applicationId),
+        eq(dealerProfiles.approvalStatus, "pending"),
+      ))
+      .returning({
+        userId: dealerProfiles.userId,
+        businessName: dealerProfiles.businessName,
+        approvalStatus: dealerProfiles.approvalStatus,
+        approvalReason: dealerProfiles.approvalReason,
+      });
 
     if (!application) return undefined;
 
@@ -82,4 +124,44 @@ export async function reviewDealerApplication(
 
     return application;
   });
+}
+
+export async function reviewVehicle(
+  vehicleId: string,
+  decision: "approved" | "rejected",
+  reason: string | undefined,
+) {
+  const [vehicle] = await db
+    .update(vehicles)
+    .set({
+      approvalStatus: decision,
+      approvalReason: decision === "rejected" ? reason ?? null : null,
+      status: decision === "approved" ? "published" : "draft",
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(vehicles.id, vehicleId),
+      eq(vehicles.approvalStatus, "pending"),
+    ))
+    .returning({
+      id: vehicles.id,
+      make: vehicles.make,
+      model: vehicles.model,
+      year: vehicles.year,
+      dealerProfileId: vehicles.dealerProfileId,
+      approvalStatus: vehicles.approvalStatus,
+      approvalReason: vehicles.approvalReason,
+    });
+
+  if (!vehicle) return undefined;
+
+  const [dealer] = await db
+    .select({
+      userId: dealerProfiles.userId,
+      businessName: dealerProfiles.businessName,
+    })
+    .from(dealerProfiles)
+    .where(eq(dealerProfiles.id, vehicle.dealerProfileId));
+
+  return { ...vehicle, dealer };
 }

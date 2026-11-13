@@ -25,6 +25,12 @@ export const dealerApprovalStatus = pgEnum("dealer_approval_status", [
 ]);
 
 export const vehicleListingStatus = pgEnum("vehicle_listing_status", ["draft", "published"]);
+export const vehicleApprovalStatus = pgEnum("vehicle_approval_status", [
+  "not_submitted",
+  "pending",
+  "approved",
+  "rejected",
+]);
 export const bookingStatus = pgEnum("booking_status", ["pending", "confirmed", "declined", "cancelled"]);
 
 export const vehicleType = pgEnum("vehicle_type", ["sedan", "suv", "truck", "van", "coupe", "convertible"]);
@@ -97,6 +103,7 @@ export const dealerProfiles = pgTable("dealer_profiles", {
   approvalStatus: dealerApprovalStatus("approval_status")
     .default("pending")
     .notNull(),
+  approvalReason: text("approval_reason"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -122,6 +129,8 @@ export const vehicles = pgTable("vehicles", {
   fuelType: fuelType("fuel_type"),
   seatingCapacity: integer("seating_capacity"),
   status: vehicleListingStatus("status").default("draft").notNull(),
+  approvalStatus: vehicleApprovalStatus("approval_status").default("approved").notNull(),
+  approvalReason: text("approval_reason"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
